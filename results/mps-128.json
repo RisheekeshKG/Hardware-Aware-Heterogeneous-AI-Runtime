@@ -1,0 +1,54 @@
+{
+  "benchmark": "matmul",
+  "backend": "mps",
+  "device": {
+    "backend": "mps",
+    "available": true,
+    "device_name": "Apple Metal Performance Shaders",
+    "torch_device": "mps",
+    "torch_version": "2.13.0",
+    "details": {
+      "built": true
+    },
+    "memory": {
+      "available_bytes": 12713115648,
+      "total_bytes": 12713115648,
+      "source": "torch.mps.recommended_max_memory minus current allocation",
+      "measured": false,
+      "estimated": true,
+      "unavailable_reason": null
+    },
+    "unavailable_reason": null
+  },
+  "size": 128,
+  "dtype": "float32",
+  "warmup_iterations": 2,
+  "measured_iterations": 5,
+  "seed": 42,
+  "correctness_passed": true,
+  "tolerance": {
+    "atol": 0.001,
+    "rtol": 0.001
+  },
+  "latency_seconds": {
+    "mean": 0.0005015999999999999,
+    "median": 0.000507125,
+    "min": 0.000489541,
+    "max": 0.000510084,
+    "stdev": 9.187027021838985e-06
+  },
+  "throughput_tflops": {
+    "mean": 0.008361850079744817,
+    "median": 0.008270749815134336,
+    "min": 0.008567829865118549,
+    "max": 0.0082227711514182,
+    "stdev": 0.4565463876430852
+  },
+  "samples_seconds": [
+    0.000489541,
+    0.000494,
+    0.000507125,
+    0.000510084,
+    0.00050725
+  ]
+}

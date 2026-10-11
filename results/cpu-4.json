@@ -1,0 +1,53 @@
+{
+  "benchmark": "matmul",
+  "backend": "cpu",
+  "device": {
+    "backend": "cpu",
+    "available": true,
+    "device_name": "arm",
+    "torch_device": "cpu",
+    "torch_version": "2.13.0",
+    "details": {
+      "platform": "macOS-27.0.1-arm64-arm-64bit",
+      "python_version": "3.12.9",
+      "logical_cpu_count": 10,
+      "physical_cpu_count": 10
+    },
+    "memory": {
+      "available_bytes": 4767449088,
+      "total_bytes": 17179869184,
+      "source": "psutil.virtual_memory",
+      "measured": true,
+      "estimated": false,
+      "unavailable_reason": null
+    },
+    "unavailable_reason": null
+  },
+  "size": 4,
+  "dtype": "float32",
+  "warmup_iterations": 0,
+  "measured_iterations": 1,
+  "seed": 42,
+  "correctness_passed": true,
+  "tolerance": {
+    "atol": 0.001,
+    "rtol": 0.001
+  },
+  "latency_seconds": {
+    "mean": 4.8042e-05,
+    "median": 4.8042e-05,
+    "min": 4.8042e-05,
+    "max": 4.8042e-05,
+    "stdev": 0.0
+  },
+  "throughput_tflops": {
+    "mean": 2.6643353732151035e-06,
+    "median": 2.6643353732151035e-06,
+    "min": 2.6643353732151035e-06,
+    "max": 2.6643353732151035e-06,
+    "stdev": 0.12799999999999997
+  },
+  "samples_seconds": [
+    4.8042e-05
+  ]
+}
