@@ -24,17 +24,22 @@ const formatLatency = (seconds) => {
 
 function App() {
   const [devices, setDevices] = useState([])
+  const [nodes, setNodes] = useState([])
   const [runs, setRuns] = useState([])
   const [activeRun, setActiveRun] = useState(null)
-  const [form, setForm] = useState({ size: 1024, backend: 'cpu', warmup_iterations: 3, measured_iterations: 10, seed: 42 })
+  const [form, setForm] = useState({ size: 1024, backend: 'cpu', target_node: 'local', warmup_iterations: 3, measured_iterations: 10, seed: 42 })
   const [error, setError] = useState('')
 
   useEffect(() => {
-    Promise.all([fetch(`${API}/api/devices`), fetch(`${API}/api/runs`)]).then(async ([deviceResponse, runResponse]) => {
-      if (!deviceResponse.ok || !runResponse.ok) throw new Error('Runtime API is not reachable')
+    const loadRuntimeState = () => Promise.all([fetch(`${API}/api/devices`), fetch(`${API}/api/nodes`), fetch(`${API}/api/runs`)]).then(async ([deviceResponse, nodeResponse, runResponse]) => {
+      if (!deviceResponse.ok || !nodeResponse.ok || !runResponse.ok) throw new Error('Runtime API is not reachable')
       setDevices(await deviceResponse.json())
+      setNodes(await nodeResponse.json())
       setRuns(await runResponse.json())
     }).catch((err) => setError(err.message))
+    loadRuntimeState()
+    const refresh = window.setInterval(loadRuntimeState, 5000)
+    return () => window.clearInterval(refresh)
   }, [])
 
   const launchRun = async (event) => {
@@ -64,7 +69,7 @@ function App() {
   }
 
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
-  const availableDevices = devices.filter((device) => device.available)
+  const availableDevices = (form.target_node === 'local' ? devices : nodes.find((node) => node.node_id === form.target_node)?.capabilities || []).filter((device) => device.available)
   const completedRuns = runs.filter((run) => run.status === 'completed' && run.result)
   const latestResult = activeRun?.result || completedRuns[0]?.result
   const samples = latestResult?.samples_seconds || []
@@ -82,9 +87,10 @@ function App() {
     <main className="main-content">
       <header className="topbar"><div><div className="eyebrow">HARDWARE-AWARE AI RUNTIME / MILESTONE 2</div><h1>Benchmark lab</h1><p>Shape a workload. Measure the machine. Keep every number honest.</p></div><div className="connection"><span className="pulse-dot" /> LIVE API</div></header>
       {error && <div className="error-banner">{error}</div>}
-      <section className="device-strip"><div className="section-kicker">Detected fabric <span>· {devices.filter((device) => device.available).length} available</span></div><div className="device-grid">{devices.map((device) => <div className={`device-card ${device.available ? 'available' : 'offline'}`} key={device.backend}><div className="device-top"><span className={`device-led ${device.available ? '' : 'muted'}`} /><strong>{device.backend.toUpperCase()}</strong><span className="device-state">{device.available ? 'READY' : 'OFFLINE'}</span></div><div className="device-name">{device.device_name}</div><div className="device-memory">{formatBytes(device.memory?.available_bytes)} <span>{device.memory?.estimated ? 'estimated free' : 'available'}</span></div></div>)}</div></section>
+      <section className="device-strip"><div className="section-kicker">Compute fabric <span>· {nodes.filter((node) => node.status === 'online').length + 1} nodes online</span></div><div className="node-grid"><div className="node-banner local"><div className="node-top"><span className="device-led" /><strong>LOCAL COORDINATOR</strong><span className="device-state">ONLINE</span></div><div className="device-name">This machine · {devices.filter((device) => device.available).map((device) => device.backend.toUpperCase()).join(' / ')}</div><div className="node-meta">{formatBytes(devices.find((device) => device.backend === 'cpu')?.memory?.available_bytes)} system memory available</div></div>{nodes.map((node) => <div className={`node-banner ${node.status === 'online' ? 'available' : 'offline'}`} key={node.node_id}><div className="node-top"><span className={`device-led ${node.status !== 'online' ? 'muted' : ''}`} /><strong>{node.name}</strong><span className="device-state">{node.status.toUpperCase()}</span></div><div className="device-name">{node.base_url} · {node.capabilities.filter((device) => device.available).map((device) => device.backend.toUpperCase()).join(' / ') || 'No backends'}</div><div className="node-meta">{node.active_job ? 'Running a workload' : 'Ready for workload'}</div></div>)}</div></section>
       <section className="workspace-grid">
         <form className="control-panel" onSubmit={launchRun}><div className="panel-heading"><div><div className="section-kicker">Workload definition</div><h2>Matrix multiplication</h2></div><span className="tag">REAL EXECUTION</span></div><p className="panel-copy">The workload is adjustable. The result is always sourced from the selected device.</p>
+          <label>Compute node<select value={form.target_node} onChange={(event) => setForm((current) => ({ ...current, target_node: event.target.value, backend: event.target.value === 'local' ? 'cpu' : (nodes.find((node) => node.node_id === event.target.value)?.capabilities.find((device) => device.available)?.backend || 'cpu') }))}><option value="local">LOCAL · this machine</option>{nodes.map((node) => <option value={node.node_id} key={node.node_id} disabled={node.status !== 'online'}>{node.name} · {node.status}</option>)}</select></label>
           <label>Execution backend<select value={form.backend} onChange={update('backend')}>{availableDevices.map((device) => <option value={device.backend} key={device.backend}>{device.backend.toUpperCase()} · {device.device_name}</option>)}</select></label>
           <div className="field-row"><label>Matrix dimension<input type="number" min="1" max="16384" value={form.size} onChange={update('size')} /><span className="field-hint">N × N · float32</span></label><label>Seed<input type="number" value={form.seed} onChange={update('seed')} /></label></div>
           <div className="field-row"><label>Warm-up passes<input type="number" min="0" max="1000" value={form.warmup_iterations} onChange={update('warmup_iterations')} /></label><label>Measured passes<input type="number" min="1" max="1000" value={form.measured_iterations} onChange={update('measured_iterations')} /></label></div>

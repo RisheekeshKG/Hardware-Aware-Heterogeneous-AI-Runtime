@@ -71,12 +71,12 @@ reported as an estimate because PyTorch exposes an allocator estimate rather
 than direct free-memory telemetry. Missing metrics are recorded as unavailable
 instead of being invented.
 
-## Live Runtime Dashboard
+## Live Runtime Dashboard and Compute Nodes
 
-The API and React dashboard are the first Milestone 2 control surface. The
-dashboard adjusts workload parameters, but all displayed device and benchmark
-values come from real runtime detection and PyTorch execution. It does not
-simulate GPU availability or performance.
+The API and React dashboard are the Milestone 2 control surface. The dashboard
+adjusts workload parameters and selects a compute node, but all displayed
+device and benchmark values come from real runtime detection and PyTorch
+execution. It does not simulate GPU availability or performance.
 
 Start the Python API from this directory:
 
@@ -108,6 +108,22 @@ The API allows development CORS by default. For a narrower policy, set
 `HAR_CORS_ORIGINS=http://<mac-ip>:5173` before starting the API. Only do this
 on a trusted network and configure the Windows firewall for port 8000.
 Authentication and job isolation are future work.
+
+Start the worker on the Windows laptop after installing the same project and
+the CUDA-compatible PyTorch build:
+
+```powershell
+har worker `
+  --coordinator http://<mac-ip>:8000 `
+  --advertise-url http://<windows-laptop-ip>:9000 `
+  --name rtx-3050-worker `
+  --node-id rtx-3050
+```
+
+The coordinator dashboard will show the worker under Compute fabric once its
+heartbeat arrives. Select that node and `cuda` in the workload panel to run a
+real CUDA benchmark on the laptop. The coordinator records the worker's node
+identity, measured result, correctness status, and network round-trip time.
 
 This milestone still does not include learned scheduling, tensor sharding,
 custom kernels, or automatic multi-machine orchestration.

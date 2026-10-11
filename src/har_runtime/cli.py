@@ -41,6 +41,25 @@ def serve(
     uvicorn.run("har_runtime.api:app", host=host, port=port, reload=False)
 
 
+@app.command()
+def worker(
+    coordinator: str = typer.Option(..., help="Coordinator API URL, e.g. http://192.168.1.10:8000"),
+    host: str = typer.Option("0.0.0.0", help="Worker bind address"),
+    port: int = typer.Option(9000, min=1, max=65535, help="Worker port"),
+    advertise_url: str = typer.Option(..., help="URL the coordinator can reach, e.g. http://192.168.1.25:9000"),
+    name: str | None = typer.Option(None, help="Human-readable node name"),
+    node_id: str | None = typer.Option(None, help="Stable node identifier"),
+) -> None:
+    """Start a real PyTorch worker and register it with a coordinator."""
+
+    import uvicorn
+
+    from .worker import configure_worker
+
+    configure_worker(coordinator=coordinator, base_url=advertise_url, name=name, node_id=node_id)
+    uvicorn.run("har_runtime.worker:worker_app", host=host, port=port, reload=False)
+
+
 @benchmark_app.command("matmul")
 def matmul(
     size: int = typer.Option(..., min=1, help="Square matrix dimension"),

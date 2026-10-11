@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +25,19 @@ class MatmulRunRequest(BaseModel):
     warmup_iterations: int = Field(default=3, ge=0, le=1000)
     measured_iterations: int = Field(default=10, ge=1, le=1000)
     seed: int = Field(default=42)
+    target_node: str = "local"
+
+
+class NodeRegistration(BaseModel):
+    node_id: str
+    name: str
+    base_url: str
+    capabilities: list[dict[str, Any]]
+
+
+class NodeHeartbeat(BaseModel):
+    node_id: str
+    active_job: str | None = None
 
 
 class RunRecord:
@@ -39,6 +53,8 @@ class RunRecord:
         self.updated_at = self.created_at
         self.condition = threading.Condition()
         self.events: list[dict[str, Any]] = []
+        self.node_id = request.target_node
+        self.network_round_trip_ms: float | None = None
 
     def publish(self, event: dict[str, Any]) -> None:
         with self.condition:
@@ -57,6 +73,8 @@ class RunRecord:
             "error": self.error,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "node_id": self.node_id,
+            "network_round_trip_ms": self.network_round_trip_ms,
         }
 
 
@@ -75,6 +93,7 @@ app.add_middleware(
 )
 
 _runs: dict[str, RunRecord] = {}
+_nodes: dict[str, dict[str, Any]] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark")
 
 
@@ -112,6 +131,100 @@ def _run_benchmark(record: RunRecord) -> None:
         record.publish({"type": "failed", "error": record.error})
 
 
+def _run_remote_benchmark(record: RunRecord, node: dict[str, Any]) -> None:
+    """Submit to a worker and poll its real execution state."""
+
+    import httpx
+
+    record.status = "running"
+    record.publish({"type": "status", "status": "running", "node_id": record.node_id})
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            started = time.perf_counter()
+            response = client.post(f"{node['base_url']}/worker/runs", json=record.request.model_dump())
+            record.network_round_trip_ms = (time.perf_counter() - started) * 1000
+            response.raise_for_status()
+            worker_run_id = response.json()["id"]
+            node["active_job"] = record.id
+            while True:
+                started = time.perf_counter()
+                status_response = client.get(f"{node['base_url']}/worker/runs/{worker_run_id}")
+                record.network_round_trip_ms = (time.perf_counter() - started) * 1000
+                status_response.raise_for_status()
+                worker_record = status_response.json()
+                record.completed_iterations = worker_record["completed_iterations"]
+                record.last_latency_seconds = worker_record["last_latency_seconds"]
+                record.publish(
+                    {
+                        "type": "progress",
+                        "completed_iterations": record.completed_iterations,
+                        "total_iterations": record.request.measured_iterations,
+                        "latency_seconds": record.last_latency_seconds,
+                        "network_round_trip_ms": record.network_round_trip_ms,
+                    }
+                )
+                if worker_record["status"] in {"completed", "failed"}:
+                    if worker_record["status"] == "completed":
+                        record.result = worker_record["result"]
+                        record.status = "completed"
+                        record.publish({"type": "completed", "result": record.result})
+                    else:
+                        record.error = worker_record["error"]
+                        record.status = "failed"
+                        record.publish({"type": "failed", "error": record.error})
+                    break
+                time.sleep(0.15)
+    except Exception as error:
+        record.error = f"Remote node '{record.node_id}' failed: {error}"
+        record.status = "failed"
+        record.publish({"type": "failed", "error": record.error})
+    finally:
+        node["active_job"] = None
+
+
+@app.post("/api/nodes/register")
+def register_node(registration: NodeRegistration) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    node = _nodes.get(registration.node_id, {})
+    node.update(
+        {
+            "node_id": registration.node_id,
+            "name": registration.name,
+            "base_url": registration.base_url.rstrip("/"),
+            "capabilities": registration.capabilities,
+            "status": "online",
+            "last_seen": now,
+            "active_job": node.get("active_job"),
+        }
+    )
+    _nodes[registration.node_id] = node
+    return node
+
+
+@app.post("/api/nodes/heartbeat")
+def heartbeat(heartbeat_data: NodeHeartbeat) -> dict[str, Any]:
+    node = _nodes.get(heartbeat_data.node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node is not registered")
+    node["status"] = "online"
+    node["last_seen"] = datetime.now(timezone.utc).isoformat()
+    node["active_job"] = heartbeat_data.active_job
+    return node
+
+
+@app.get("/api/nodes")
+def nodes() -> list[dict[str, Any]]:
+    now = datetime.now(timezone.utc)
+    for node in _nodes.values():
+        try:
+            last_seen = datetime.fromisoformat(node["last_seen"])
+            if (now - last_seen).total_seconds() > 15:
+                node["status"] = "offline"
+        except (KeyError, ValueError):
+            node["status"] = "offline"
+    return list(_nodes.values())
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "hardware-aware-ai-runtime"}
@@ -137,13 +250,28 @@ def run_status(run_id: str) -> dict[str, Any]:
 
 @app.post("/api/runs", status_code=202)
 def start_run(request: MatmulRunRequest) -> dict[str, Any]:
-    try:
-        get_device_info(request.backend)
-    except (ValueError, RuntimeError) as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    if request.target_node == "local":
+        try:
+            get_device_info(request.backend)
+        except (ValueError, RuntimeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        runner = _run_benchmark
+        runner_args = (None,)
+    else:
+        node = _nodes.get(request.target_node)
+        if not node or node.get("status") != "online":
+            raise HTTPException(status_code=400, detail=f"Node '{request.target_node}' is not online")
+        capabilities = {device["backend"]: device for device in node["capabilities"]}
+        if not capabilities.get(request.backend, {}).get("available", False):
+            raise HTTPException(status_code=400, detail=f"Backend '{request.backend}' is unavailable on node '{request.target_node}'")
+        runner = _run_remote_benchmark
+        runner_args = (node,)
     record = RunRecord(request)
     _runs[record.id] = record
-    _executor.submit(_run_benchmark, record)
+    if request.target_node == "local":
+        _executor.submit(runner, record)
+    else:
+        _executor.submit(runner, record, *runner_args)
     return record.snapshot()
 
 
