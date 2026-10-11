@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './styles.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const CONTROL_API = 'http://127.0.0.1:9100'
 
 const formatBytes = (bytes) => {
   if (bytes == null) return 'Unavailable'
@@ -29,6 +30,7 @@ function App() {
   const [activeRun, setActiveRun] = useState(null)
   const [form, setForm] = useState({ size: 1024, backend: 'cpu', target_node: 'local', warmup_iterations: 3, measured_iterations: 10, seed: 42 })
   const [error, setError] = useState('')
+  const [setupState, setSetupState] = useState('checking')
 
   useEffect(() => {
     const loadRuntimeState = () => Promise.all([fetch(`${API}/api/devices`), fetch(`${API}/api/nodes`), fetch(`${API}/api/runs`)]).then(async ([deviceResponse, nodeResponse, runResponse]) => {
@@ -41,6 +43,25 @@ function App() {
     const refresh = window.setInterval(loadRuntimeState, 5000)
     return () => window.clearInterval(refresh)
   }, [])
+
+  useEffect(() => {
+    fetch(`${CONTROL_API}/control/status`)
+      .then((response) => response.json())
+      .then((data) => setSetupState(data.setup_running ? 'running' : 'ready'))
+      .catch(() => setSetupState('unavailable'))
+  }, [])
+
+  const startSetup = async () => {
+    setError('')
+    try {
+      const response = await fetch(`${CONTROL_API}/control/setup`, { method: 'POST' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Could not start local setup')
+      setSetupState('running')
+    } catch (err) {
+      setError(`${err.message}. Run setup-windows-gpu.bat once, then refresh this page.`)
+    }
+  }
 
   const launchRun = async (event) => {
     event.preventDefault()
@@ -87,6 +108,7 @@ function App() {
     <main className="main-content">
       <header className="topbar"><div><div className="eyebrow">HARDWARE-AWARE AI RUNTIME / MILESTONE 2</div><h1>Benchmark lab</h1><p>Shape a workload. Measure the machine. Keep every number honest.</p></div><div className="connection"><span className="pulse-dot" /> LIVE API</div></header>
       {error && <div className="error-banner">{error}</div>}
+      <section className="device-strip"><div className="section-kicker">Local machine setup</div><div className="node-banner local"><div className="node-top"><span className="device-led" /><strong>FRONTEND CONTROL</strong><span className="device-state">{setupState.toUpperCase()}</span></div><div className="device-name">Install and verify the approved CUDA runtime setup on this PC.</div><div className="node-meta"><button className="run-button" type="button" onClick={startSetup} disabled={setupState === 'running' || setupState === 'checking'}>{setupState === 'running' ? 'Setup running...' : 'Setup this PC'}</button></div></div></section>
       <section className="device-strip"><div className="section-kicker">Compute fabric <span>· {nodes.filter((node) => node.status === 'online').length + 1} nodes online</span></div><div className="node-grid"><div className="node-banner local"><div className="node-top"><span className="device-led" /><strong>LOCAL COORDINATOR</strong><span className="device-state">ONLINE</span></div><div className="device-name">This machine · {devices.filter((device) => device.available).map((device) => device.backend.toUpperCase()).join(' / ')}</div><div className="node-meta">{formatBytes(devices.find((device) => device.backend === 'cpu')?.memory?.available_bytes)} system memory available</div></div>{nodes.map((node) => <div className={`node-banner ${node.status === 'online' ? 'available' : 'offline'}`} key={node.node_id}><div className="node-top"><span className={`device-led ${node.status !== 'online' ? 'muted' : ''}`} /><strong>{node.name}</strong><span className="device-state">{node.status.toUpperCase()}</span></div><div className="device-name">{node.base_url} · {node.capabilities.filter((device) => device.available).map((device) => device.backend.toUpperCase()).join(' / ') || 'No backends'}</div><div className="node-meta">{node.active_job ? 'Running a workload' : 'Ready for workload'}</div></div>)}</div></section>
       <section className="workspace-grid">
         <form className="control-panel" onSubmit={launchRun}><div className="panel-heading"><div><div className="section-kicker">Workload definition</div><h2>Matrix multiplication</h2></div><span className="tag">REAL EXECUTION</span></div><p className="panel-copy">The workload is adjustable. The result is always sourced from the selected device.</p>

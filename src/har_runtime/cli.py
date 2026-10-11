@@ -42,6 +42,18 @@ def serve(
 
 
 @app.command()
+def control(
+    host: str = typer.Option("127.0.0.1", help="Local control bind address"),
+    port: int = typer.Option(9100, min=1, max=65535, help="Local control port"),
+) -> None:
+    """Start the localhost-only frontend setup control agent."""
+
+    from .control import run_control
+
+    run_control(host=host, port=port)
+
+
+@app.command()
 def worker(
     coordinator: str = typer.Option(..., help="Coordinator API URL, e.g. http://192.168.1.10:8000"),
     host: str = typer.Option("0.0.0.0", help="Worker bind address"),

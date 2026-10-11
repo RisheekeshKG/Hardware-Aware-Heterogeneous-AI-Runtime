@@ -20,6 +20,22 @@ standard install normally includes CPU support; on NVIDIA machines install a
 PyTorch build matching the desired CUDA version using the official PyTorch
 selector before installing this package.
 
+### Windows NVIDIA setup
+
+The repository includes a Windows bootstrap for the worker laptop:
+
+1. Copy the repository folder to Windows.
+2. Confirm Python 3.10 or newer and the NVIDIA driver are installed.
+3. Double-click `setup-windows-gpu.bat`.
+4. Wait for `Setup completed successfully`.
+
+The script creates `.venv`, installs CUDA-enabled PyTorch from the official
+CUDA 12.8 wheel index, installs this project, and verifies CUDA device
+detection. It also starts the localhost-only control service on port `9100`
+for the dashboard setup status. The first bootstrap still requires the
+one-time double-click because a browser cannot safely start a fresh local
+process.
+
 ## CLI
 
 ```bash
