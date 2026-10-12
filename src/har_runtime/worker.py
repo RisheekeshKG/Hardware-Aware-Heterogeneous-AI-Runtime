@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import socket
 import threading
 import time
@@ -16,8 +17,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .api import MatmulRunRequest
-from .benchmark import run_matmul
-from .devices import discover_devices, get_device_info
+from .benchmark import run_workload
+from .devices import discover_devices, get_device_info, system_info
+from .discovery import DiscoveryBeacon
 
 
 class WorkerRun:
@@ -44,10 +46,31 @@ class WorkerRun:
         }
 
 
+class WorkerJoinRequest(BaseModel):
+    coordinator: str
+    name: str = ""
+    node_id: str = ""
+
+
 worker_app = FastAPI(title="Hardware-Aware AI Runtime Worker", version="0.2.0")
 _worker_runs: dict[str, WorkerRun] = {}
 _worker_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="har-worker")
 _worker_config: dict[str, str] = {}
+_node_id_path = Path.home() / ".har-runtime" / "node-id"
+_discovery_beacon: DiscoveryBeacon | None = None
+
+
+def stable_node_id() -> str:
+    """Return a persistent identity for this machine, generated only once."""
+
+    if _node_id_path.is_file():
+        stored = _node_id_path.read_text(encoding="utf-8").strip()
+        if stored:
+            return stored
+    _node_id_path.parent.mkdir(parents=True, exist_ok=True)
+    generated = f"{socket.gethostname().lower()}-{uuid.uuid4().hex[:8]}"
+    _node_id_path.write_text(generated + "\n", encoding="utf-8")
+    return generated
 
 
 def _execute(record: WorkerRun) -> None:
@@ -58,9 +81,14 @@ def _execute(record: WorkerRun) -> None:
         record.last_latency_seconds = latency
 
     try:
-        record.result = run_matmul(
+        record.result = run_workload(
+            workload=record.request.workload,
             size=record.request.size,
             backend=record.request.backend,
+            batch_size=record.request.batch_size,
+            image_size=record.request.image_size,
+            depth=record.request.depth,
+            traversal_count=record.request.traversal_count,
             warmup_iterations=record.request.warmup_iterations,
             measured_iterations=record.request.measured_iterations,
             seed=record.request.seed,
@@ -80,6 +108,17 @@ def worker_health() -> dict[str, str]:
 @worker_app.get("/worker/capabilities")
 def capabilities() -> list[dict[str, Any]]:
     return [device.to_dict() for device in discover_devices()]
+
+
+@worker_app.post("/worker/join")
+def join_host(request: WorkerJoinRequest) -> dict[str, Any]:
+    configure_worker(
+        coordinator=request.coordinator,
+        base_url=_worker_config["base_url"],
+        name=request.name,
+        node_id=request.node_id or stable_node_id(),
+    )
+    return {"status": "joining", "node_id": _worker_config["node_id"], "coordinator": request.coordinator}
 
 
 @worker_app.post("/worker/runs", status_code=202)
@@ -109,6 +148,7 @@ def _registration_loop() -> None:
         "name": _worker_config["name"],
         "base_url": _worker_config["base_url"],
         "capabilities": capabilities(),
+        "host": system_info(),
     }
     while True:
         try:
@@ -120,13 +160,28 @@ def _registration_loop() -> None:
         time.sleep(5)
 
 
-def configure_worker(*, coordinator: str, base_url: str, name: str | None = None, node_id: str | None = None) -> None:
+def configure_worker(*, coordinator: str | None, base_url: str, name: str | None = None, node_id: str | None = None) -> None:
+    global _discovery_beacon
+    resolved_node_id = node_id or stable_node_id()
+    resolved_name = name or socket.gethostname()
     _worker_config.update(
         {
-            "coordinator": coordinator,
+            "coordinator": coordinator or "",
             "base_url": base_url.rstrip("/"),
-            "name": name or socket.gethostname(),
-            "node_id": node_id or f"{socket.gethostname().lower()}-{uuid.uuid4().hex[:6]}",
+            "name": resolved_name,
+            "node_id": resolved_node_id,
         }
     )
-    threading.Thread(target=_registration_loop, daemon=True, name="har-registration").start()
+    _discovery_beacon = DiscoveryBeacon(
+        {
+            "role": "worker",
+            "node_id": resolved_node_id,
+            "name": resolved_name,
+            "base_url": base_url.rstrip("/"),
+            "host": system_info(),
+            "capabilities": capabilities(),
+        }
+    )
+    _discovery_beacon.start()
+    if coordinator:
+        threading.Thread(target=_registration_loop, daemon=True, name="har-registration").start()

@@ -37,6 +37,8 @@ def _csv_row(result: BenchmarkResult) -> dict[str, Any]:
         row[f"latency_{name}_seconds"] = value
     for name, value in result.throughput_tflops.items():
         row[f"throughput_{name}_tflops"] = value
+    for name, value in result.metrics.items():
+        row[f"metric_{name}"] = value
     return row
 
 

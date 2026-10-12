@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hardware-aware-ai-runtime"
 version = "0.1.0"
-description = "Milestone 1 benchmark foundation for heterogeneous AI hardware"
+description = "Desktop-first benchmark runtime for heterogeneous AI hardware"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8.0"]
+desktop = ["pyinstaller>=6.0"]
 
 [project.scripts]
 har = "har_runtime.cli:app"

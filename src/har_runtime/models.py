@@ -1,6 +1,6 @@
 """Data models shared by discovery, benchmarking, and result exporters."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -58,6 +58,8 @@ class BenchmarkResult:
     latency_seconds: dict[str, float]
     throughput_tflops: dict[str, float]
     samples_seconds: list[float]
+    workload_config: dict[str, Any] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

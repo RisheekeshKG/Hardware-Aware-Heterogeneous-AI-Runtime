@@ -14,6 +14,44 @@ from .models import DeviceInfo, MemoryMeasurement
 BACKENDS = ("cpu", "mps", "cuda")
 
 
+def system_info() -> dict[str, object]:
+    """Collect host inventory from the current machine without estimating hardware."""
+
+    memory = psutil.virtual_memory()
+    frequency = psutil.cpu_freq()
+    return {
+        "hostname": platform.node(),
+        "os": {
+            "name": platform.system(),
+            "release": platform.release(),
+            "version": platform.version(),
+            "platform": platform.platform(),
+        },
+        "architecture": {
+            "machine": platform.machine(),
+            "processor": platform.processor() or None,
+        },
+        "cpu": {
+            "logical_cores": psutil.cpu_count(logical=True),
+            "physical_cores": psutil.cpu_count(logical=False),
+            "frequency_mhz": frequency.current if frequency else None,
+        },
+        "memory": {
+            "total_bytes": memory.total,
+            "available_bytes": memory.available,
+            "used_bytes": memory.used,
+            "percent_used": memory.percent,
+            "source": "psutil.virtual_memory",
+        },
+        "runtime": {
+            "python_version": sys.version.split()[0],
+            "pytorch_version": torch.__version__,
+            "cuda_runtime": torch.version.cuda,
+            "mps_built": bool(torch.backends.mps.is_built()),
+        },
+    }
+
+
 def _system_memory() -> MemoryMeasurement:
     memory = psutil.virtual_memory()
     return MemoryMeasurement(
@@ -95,11 +133,14 @@ def _cuda_info() -> DeviceInfo:
     details: dict[str, object] = {"device_count": torch.cuda.device_count()}
     device_name = "NVIDIA CUDA"
     if available:
+        properties = torch.cuda.get_device_properties(0)
         details.update(
             {
                 "device_index": 0,
                 "cuda_version": torch.version.cuda,
                 "capability": list(torch.cuda.get_device_capability(0)),
+                "total_memory_bytes": properties.total_memory,
+                "multiprocessors": properties.multi_processor_count,
             }
         )
         device_name = torch.cuda.get_device_name(0)

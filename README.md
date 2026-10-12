@@ -1,7 +1,7 @@
 # Hardware-Aware Heterogeneous AI Runtime
 
-Milestone 1 provides a local PyTorch benchmark foundation for CPU, Apple MPS,
-and NVIDIA CUDA. It detects hardware at runtime and never silently changes an
+HAR Runtime is a desktop-first benchmark workspace for CPU, Apple MPS, and
+NVIDIA CUDA. It detects hardware at runtime and never silently changes an
 explicitly requested backend.
 
 ## Installation
@@ -20,21 +20,9 @@ standard install normally includes CPU support; on NVIDIA machines install a
 PyTorch build matching the desired CUDA version using the official PyTorch
 selector before installing this package.
 
-### Windows NVIDIA setup
-
-The repository includes a Windows bootstrap for the worker laptop:
-
-1. Copy the repository folder to Windows.
-2. Confirm Python 3.10 or newer and the NVIDIA driver are installed.
-3. Double-click `setup-windows-gpu.bat`.
-4. Wait for `Setup completed successfully`.
-
-The script creates `.venv`, installs CUDA-enabled PyTorch from the official
-CUDA 12.8 wheel index, installs this project, and verifies CUDA device
-detection. It also starts the localhost-only control service on port `9100`
-for the dashboard setup status. The first bootstrap still requires the
-one-time double-click because a browser cannot safely start a fresh local
-process.
+Windows users should install the packaged desktop application. It includes
+the same first-run runtime setup and does not require a Python environment or
+PowerShell bootstrap script.
 
 ## CLI
 
@@ -87,17 +75,27 @@ reported as an estimate because PyTorch exposes an allocator estimate rather
 than direct free-memory telemetry. Missing metrics are recorded as unavailable
 instead of being invented.
 
-## Live Runtime Dashboard and Compute Nodes
+## Runtime Dashboard and Compute Nodes
 
-The API and React dashboard are the Milestone 2 control surface. The dashboard
+The API and React dashboard are the control surface. The dashboard
 adjusts workload parameters and selects a compute node, but all displayed
 device and benchmark values come from real runtime detection and PyTorch
 execution. It does not simulate GPU availability or performance.
 
+The dashboard provides three deterministic workloads:
+
+- `matmul`: dense matrix multiplication, reported in TFLOP/s.
+- `image`: a built-in seeded CNN over generated image tensors, reported in images/second.
+- `tree`: seeded tensor-backed binary-tree traversal, reported in traversals/second.
+
+No external dataset or model download is included. The seed and workload
+configuration are recorded with every result so runs can be repeated on each
+node.
+
 Start the Python API from this directory:
 
 ```bash
-har serve
+har host --host 0.0.0.0 --port 8000 --advertise-url http://<host-ip>:8000
 ```
 
 In another terminal, start the Vite dashboard:
@@ -141,5 +139,80 @@ heartbeat arrives. Select that node and `cuda` in the workload panel to run a
 real CUDA benchmark on the laptop. The coordinator records the worker's node
 identity, measured result, correctness status, and network round-trip time.
 
-This milestone still does not include learned scheduling, tensor sharding,
+For dashboard-based connection, start the remote machine as a standalone
+worker first, then open Device fabric on the Host and use **Connect a worker**:
+
+```powershell
+har worker --advertise-url http://<worker-ip>:9000 --name gpu-worker
+```
+
+Enter only the worker URL in the dashboard. The worker keeps its automatic
+hostname and stable node ID; after it registers and heartbeats, it appears in
+the fabric. No device is marked connected before that handshake completes.
+
+Workers advertise on the local network over UDP port `9471`. The Device fabric
+radar refreshes discovered nodes automatically and shows their real hardware
+inventory before connection. Allow UDP `9471` through the Windows firewall if
+the worker does not appear; the worker HTTP port (normally `9000`) is still
+needed for connection and workload traffic.
+
+### Desktop app
+
+The Vite dashboard also has a Tauri 2 desktop shell for macOS, Windows, and
+Linux. On macOS, install the Rust toolchain and Xcode Command Line Tools first:
+
+```bash
+xcode-select --install
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+Confirm `cargo --version` works, start the API with `har serve`, then run from
+`web/`:
+
+```bash
+npm run desktop:dev
+```
+
+Create a native installer with:
+
+```bash
+npm run desktop:build
+```
+
+The release workflow builds the platform-specific Python runtime assets and
+publishes them with the installers. On first launch, the app downloads the
+matching runtime once, caches it in the user application data directory, and
+starts it automatically. Users do not need Python, Rust, or terminal commands.
+
+Create a release by pushing a version tag:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow produces normal macOS and Windows installers plus the runtime
+assets used by first-run setup. The same app can also connect to remote LAN
+workers.
+
+Every `har serve` instance starts as a Host and exposes `GET /api/session`.
+Workers join by coordinator URL; no pairing code is required:
+
+```powershell
+har worker --coordinator http://<host-ip>:8000 --advertise-url http://<worker-ip>:9000 --name gpu-worker
+```
+
+Workers keep their own local server, but are assigned the Worker role for the host
+session it joined. This makes the role session-based rather than permanently
+binding a particular laptop to coordinator or worker behavior.
+
+Each node also reports a hardware inventory to the Device fabric view:
+hostname, operating system, OS release, architecture, processor, physical and
+logical CPU counts, CPU frequency when available, total and available RAM,
+Python version, PyTorch version, CUDA runtime, MPS build status, and CUDA GPU
+name, memory, compute capability, and multiprocessor count when available.
+Unavailable fields remain explicitly unavailable.
+
+The current runtime does not include learned scheduling, tensor sharding,
 custom kernels, or automatic multi-machine orchestration.

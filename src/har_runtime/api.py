@@ -15,17 +15,23 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .benchmark import run_matmul
-from .devices import discover_devices, get_device_info
+from .benchmark import run_workload
+from .discovery import DiscoveryRegistry
+from .devices import discover_devices, get_device_info, system_info
 
 
 class MatmulRunRequest(BaseModel):
+    workload: Literal["matmul", "image", "tree"] = "matmul"
     size: int = Field(default=1024, ge=1, le=16384)
     backend: Literal["cpu", "mps", "cuda"] = "cpu"
     warmup_iterations: int = Field(default=3, ge=0, le=1000)
     measured_iterations: int = Field(default=10, ge=1, le=1000)
     seed: int = Field(default=42)
     target_node: str = "local"
+    batch_size: int = Field(default=8, ge=1, le=4096)
+    image_size: int = Field(default=32, ge=4, le=1024)
+    depth: int = Field(default=12, ge=1, le=20)
+    traversal_count: int = Field(default=4096, ge=1, le=1_000_000)
 
 
 class NodeRegistration(BaseModel):
@@ -33,11 +39,27 @@ class NodeRegistration(BaseModel):
     name: str
     base_url: str
     capabilities: list[dict[str, Any]]
+    host: dict[str, Any] = Field(default_factory=dict)
 
 
 class NodeHeartbeat(BaseModel):
     node_id: str
     active_job: str | None = None
+
+
+class NodeConnectRequest(BaseModel):
+    worker_url: str
+    name: str | None = None
+    node_id: str = ""
+
+
+class DiscoveryConnectRequest(BaseModel):
+    node_id: str
+    name: str | None = None
+
+
+class NodeRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 
 class RunRecord:
@@ -95,6 +117,18 @@ app.add_middleware(
 _runs: dict[str, RunRecord] = {}
 _nodes: dict[str, dict[str, Any]] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark")
+_discovery = DiscoveryRegistry()
+_session = {
+    "session_id": uuid.uuid4().hex[:10],
+    "role": "host",
+    "host_url": os.getenv("HAR_HOST_URL"),
+    "created_at": datetime.now(timezone.utc).isoformat(),
+}
+
+
+def configure_host_url(url: str | None) -> None:
+    if url:
+        _session["host_url"] = url.rstrip("/")
 
 
 def _run_benchmark(record: RunRecord) -> None:
@@ -114,9 +148,14 @@ def _run_benchmark(record: RunRecord) -> None:
         )
 
     try:
-        result = run_matmul(
+        result = run_workload(
+            workload=record.request.workload,
             size=record.request.size,
             backend=record.request.backend,
+            batch_size=record.request.batch_size,
+            image_size=record.request.image_size,
+            depth=record.request.depth,
+            traversal_count=record.request.traversal_count,
             warmup_iterations=record.request.warmup_iterations,
             measured_iterations=record.request.measured_iterations,
             seed=record.request.seed,
@@ -192,9 +231,12 @@ def register_node(registration: NodeRegistration) -> dict[str, Any]:
             "name": registration.name,
             "base_url": registration.base_url.rstrip("/"),
             "capabilities": registration.capabilities,
+            "host": registration.host,
             "status": "online",
             "last_seen": now,
             "active_job": node.get("active_job"),
+            "role": "worker",
+            "session_id": _session["session_id"],
         }
     )
     _nodes[registration.node_id] = node
@@ -233,6 +275,77 @@ def health() -> dict[str, str]:
 @app.get("/api/devices")
 def devices() -> list[dict[str, Any]]:
     return [device.to_dict() for device in discover_devices()]
+
+
+@app.get("/api/system")
+def system() -> dict[str, Any]:
+    return {"host": system_info(), "devices": devices()}
+
+
+@app.get("/api/session")
+def session() -> dict[str, Any]:
+    return {**_session, "connected_workers": len(_nodes)}
+
+
+@app.post("/api/nodes/connect")
+def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
+    """Ask a standalone worker to join this host, then return its registration."""
+
+    import httpx
+
+    worker_url = request.worker_url.rstrip("/")
+    coordinator_url = _session.get("host_url") or os.getenv("HAR_HOST_URL")
+    if not coordinator_url:
+        raise HTTPException(status_code=400, detail="Host URL is not configured; start har serve with --advertise-url")
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(
+                f"{worker_url}/worker/join",
+                json={
+                    "coordinator": coordinator_url,
+                    "name": request.name or "",
+                    "node_id": request.node_id,
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPStatusError as error:
+        detail = error.response.text or str(error)
+        raise HTTPException(status_code=400, detail=f"Worker rejected connection: {detail}") from error
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"Worker is unreachable: {error}") from error
+
+
+@app.get("/api/discovery")
+def discovery() -> list[dict[str, Any]]:
+    return _discovery.list_nodes()
+
+
+@app.post("/api/discovery/connect")
+def connect_discovered_node(request: DiscoveryConnectRequest) -> dict[str, Any]:
+    node = _discovery.get(request.node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Discovered node is no longer visible")
+    connect_node(
+        NodeConnectRequest(
+            worker_url=node["base_url"],
+            name=request.name or node.get("name", "runtime-worker"),
+            node_id=request.node_id,
+        )
+    )
+    return {"status": "joining", "node_id": request.node_id, "name": request.name or node.get("name")}
+
+
+@app.post("/api/nodes/{node_id}/rename")
+def rename_node(node_id: str, request: NodeRenameRequest) -> dict[str, Any]:
+    node = _nodes.get(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    name = request.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name cannot be blank")
+    node["name"] = name
+    return node
 
 
 @app.get("/api/runs")

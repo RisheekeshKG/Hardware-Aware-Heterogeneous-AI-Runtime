@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from har_runtime.benchmark import run_matmul
+from har_runtime.benchmark import run_matmul, run_workload
 from har_runtime.devices import backend_available
 
 
@@ -24,3 +24,22 @@ def test_available_accelerator_smoke(backend):
 def test_unknown_backend_is_rejected():
     with pytest.raises(ValueError, match="Unknown backend"):
         run_matmul(size=8, backend="tpu")
+
+
+@pytest.mark.parametrize("workload", ["image", "tree"])
+def test_deterministic_workloads_are_correct(workload):
+    result = run_workload(
+        workload=workload,
+        backend="cpu",
+        batch_size=2,
+        image_size=8,
+        depth=4,
+        traversal_count=16,
+        warmup_iterations=1,
+        measured_iterations=2,
+        seed=42,
+    )
+    assert result.benchmark == workload
+    assert result.correctness_passed
+    assert len(result.samples_seconds) == 2
+    assert result.metrics

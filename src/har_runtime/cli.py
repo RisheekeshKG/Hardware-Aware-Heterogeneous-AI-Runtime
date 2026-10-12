@@ -5,7 +5,7 @@ from typing import Optional
 
 import typer
 
-from .benchmark import run_matmul
+from .benchmark import run_matmul, run_workload
 from .devices import BACKENDS, discover_devices
 from .exporters import write_csv, write_json
 
@@ -33,29 +33,31 @@ def devices() -> None:
 def serve(
     host: str = typer.Option("127.0.0.1", help="API bind address"),
     port: int = typer.Option(8000, min=1, max=65535, help="API port"),
+    advertise_url: str | None = typer.Option(None, help="Host URL workers should use"),
 ) -> None:
     """Start the live API used by the dashboard."""
 
     import uvicorn
+    from .api import configure_host_url
 
+    configure_host_url(advertise_url)
     uvicorn.run("har_runtime.api:app", host=host, port=port, reload=False)
 
 
 @app.command()
-def control(
-    host: str = typer.Option("127.0.0.1", help="Local control bind address"),
-    port: int = typer.Option(9100, min=1, max=65535, help="Local control port"),
+def host(
+    host: str = typer.Option("0.0.0.0", help="Host API bind address"),
+    port: int = typer.Option(8000, min=1, max=65535, help="Host API port"),
+    advertise_url: str | None = typer.Option(None, help="Host URL workers should use"),
 ) -> None:
-    """Start the localhost-only frontend setup control agent."""
+    """Start this device as a Host. Runtime servers are hosts by default."""
 
-    from .control import run_control
-
-    run_control(host=host, port=port)
+    serve(host=host, port=port, advertise_url=advertise_url)
 
 
 @app.command()
 def worker(
-    coordinator: str = typer.Option(..., help="Coordinator API URL, e.g. http://192.168.1.10:8000"),
+    coordinator: str | None = typer.Option(None, help="Coordinator API URL; omit for standalone join mode"),
     host: str = typer.Option("0.0.0.0", help="Worker bind address"),
     port: int = typer.Option(9000, min=1, max=65535, help="Worker port"),
     advertise_url: str = typer.Option(..., help="URL the coordinator can reach, e.g. http://192.168.1.25:9000"),
@@ -105,6 +107,36 @@ def matmul(
         typer.echo(f"JSON: {write_json(result, json_output)}")
     if csv_output:
         typer.echo(f"CSV: {write_csv(result, csv_output)}")
+
+
+@benchmark_app.command("image")
+def image(
+    backend: str = typer.Option("cpu", help=f"Backend: {', '.join(BACKENDS)}"),
+    batch_size: int = typer.Option(8, min=1),
+    image_size: int = typer.Option(32, min=4),
+    warmup: int = typer.Option(3, min=0),
+    iterations: int = typer.Option(10, min=1),
+    seed: int = typer.Option(42),
+) -> None:
+    """Run the deterministic built-in image CNN workload."""
+
+    result = run_workload(workload="image", backend=backend, batch_size=batch_size, image_size=image_size, warmup_iterations=warmup, measured_iterations=iterations, seed=seed)
+    typer.echo(f"image inference on {result.device.device_name}: {result.metrics['median_images_per_second']:.3f} images/sec; correctness passed")
+
+
+@benchmark_app.command("tree")
+def tree(
+    backend: str = typer.Option("cpu", help=f"Backend: {', '.join(BACKENDS)}"),
+    depth: int = typer.Option(12, min=1, max=20),
+    traversals: int = typer.Option(4096, min=1),
+    warmup: int = typer.Option(3, min=0),
+    iterations: int = typer.Option(10, min=1),
+    seed: int = typer.Option(42),
+) -> None:
+    """Run the deterministic tensor-backed tree traversal workload."""
+
+    result = run_workload(workload="tree", backend=backend, depth=depth, traversal_count=traversals, warmup_iterations=warmup, measured_iterations=iterations, seed=seed)
+    typer.echo(f"tree traversal on {result.device.device_name}: {result.metrics['median_traversals_per_second']:.3f} traversals/sec; correctness passed")
 
 
 if __name__ == "__main__":
