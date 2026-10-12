@@ -139,6 +139,8 @@ def configure_host_url(url: str | None) -> None:
                     host = probe.getsockname()[0]
                 except OSError:
                     host = socket.gethostbyname(socket.gethostname())
+            if parsed.port:
+                host = f"{host}:{parsed.port}"
             url = urlunsplit((parsed.scheme or "http", host, parsed.path, parsed.query, parsed.fragment))
         _session["host_url"] = url.rstrip("/")
 
@@ -310,17 +312,28 @@ def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
     if not coordinator_url:
         raise HTTPException(status_code=400, detail="Host URL is not configured; start har serve with --advertise-url")
     try:
-        with httpx.Client(timeout=10.0) as client:
-            response = client.post(
-                f"{worker_url}/worker/join",
-                json={
-                    "coordinator": coordinator_url,
-                    "name": request.name or "",
-                    "node_id": request.node_id,
-                },
-            )
-            response.raise_for_status()
-            return response.json()
+        deadline = time.monotonic() + 60.0
+        last_error: httpx.RequestError | None = None
+        with httpx.Client(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
+            while time.monotonic() < deadline:
+                try:
+                    response = client.post(
+                        f"{worker_url}/worker/join",
+                        json={
+                            "coordinator": coordinator_url,
+                            "name": request.name or "",
+                            "node_id": request.node_id,
+                        },
+                    )
+                    response.raise_for_status()
+                    return response.json()
+                except httpx.RequestError as error:
+                    last_error = error
+                    time.sleep(0.5)
+        raise HTTPException(
+            status_code=504,
+            detail=f"Worker did not become ready within 60 seconds: {last_error}",
+        )
     except httpx.HTTPStatusError as error:
         detail = error.response.text or str(error)
         raise HTTPException(status_code=400, detail=f"Worker rejected connection: {detail}") from error

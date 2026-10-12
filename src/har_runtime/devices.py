@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import platform
+import os
 import sys
 from collections.abc import Callable
 
@@ -128,9 +129,26 @@ def _mps_info() -> DeviceInfo:
 
 
 def _cuda_info() -> DeviceInfo:
-    available = bool(torch.cuda.is_available())
-    reason = None if available else "PyTorch CUDA backend is unavailable on this host"
-    details: dict[str, object] = {"device_count": torch.cuda.device_count()}
+    cuda_runtime = torch.version.cuda
+    details: dict[str, object] = {
+        "device_count": 0,
+        "torch_cuda_version": cuda_runtime,
+        "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES"),
+    }
+    try:
+        available = bool(torch.cuda.is_available())
+        details["device_count"] = torch.cuda.device_count()
+    except Exception as error:
+        available = False
+        details["probe_error"] = str(error)
+    if available:
+        reason = None
+    elif cuda_runtime is None:
+        reason = "Installed PyTorch build has no CUDA runtime"
+    elif details.get("probe_error"):
+        reason = f"CUDA probe failed: {details['probe_error']}"
+    else:
+        reason = f"CUDA runtime {cuda_runtime} is present, but no compatible NVIDIA driver or GPU was detected"
     device_name = "NVIDIA CUDA"
     if available:
         properties = torch.cuda.get_device_properties(0)

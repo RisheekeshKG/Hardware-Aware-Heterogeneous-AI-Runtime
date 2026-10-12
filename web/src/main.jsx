@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -30,6 +30,7 @@ function App() {
   const [runs, setRuns] = useState([]);
   const [activeRun, setActiveRun] = useState(null);
   const [view, setView] = useState("benchmark");
+  const [runtimeReady, setRuntimeReady] = useState(false);
   const [form, setForm] = useState({
     workload: "matmul",
     size: 1024,
@@ -44,23 +45,20 @@ function App() {
     seed: 42,
   });
   const [error, setError] = useState("");
+  const runtimeReadyRef = useRef(false);
 
   useEffect(() => {
     const loadRuntimeState = () =>
       Promise.all([
+        fetch(`${API}/api/health`),
         fetch(`${API}/api/system`),
         fetch(`${API}/api/nodes`),
         fetch(`${API}/api/discovery`),
         fetch(`${API}/api/runs`),
       ])
-        .then(
-          async ([
-            systemResponse,
-            nodeResponse,
-            discoveryResponse,
-            runResponse,
-          ]) => {
+        .then(async ([healthResponse, systemResponse, nodeResponse, discoveryResponse, runResponse]) => {
             if (
+              !healthResponse.ok ||
               !systemResponse.ok ||
               !nodeResponse.ok ||
               !discoveryResponse.ok ||
@@ -76,13 +74,30 @@ function App() {
             setNodes(await nodeResponse.json());
             setNearby(await discoveryResponse.json());
             setRuns(await runResponse.json());
-          },
-        )
-        .catch((err) => setError(err.message));
+            runtimeReadyRef.current = true;
+            setRuntimeReady(true);
+          })
+        .catch((err) => {
+          if (runtimeReadyRef.current) setError(err.message);
+        });
     loadRuntimeState();
     const refresh = window.setInterval(loadRuntimeState, 5000);
     return () => window.clearInterval(refresh);
   }, []);
+
+  if (!runtimeReady) {
+    return (
+      <main className="startup-screen">
+        <div className="startup-card">
+          <div className="startup-spinner" />
+          <div className="eyebrow">HAR Runtime</div>
+          <h1>Starting local runtime</h1>
+          <p>Loading the Host and Worker services. This can take about a minute on the first launch.</p>
+          <span className="startup-status">Waiting for services to become ready...</span>
+        </div>
+      </main>
+    );
+  }
 
   const launchRun = async (event) => {
     event.preventDefault();
@@ -831,9 +846,11 @@ function FabricPage({
             <div className="section-kicker">LAN RADAR</div>
             <h2>Nearby runtime nodes</h2>
           </div>
-          <span className="chart-meta">{nearby.length} discovered</span>
+          <div className="radar-heading-actions">
+            <span className="chart-meta">{nearby.length} discovered</span>
+            <ScanNearbyButton onScan={onDiscoveryRefresh} />
+          </div>
         </div>
-        <ScanNearbyButton onScan={onDiscoveryRefresh} />
         {nearby.length ? (
           <div className="radar-grid">
             {nearby.map((node) => (

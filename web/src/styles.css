@@ -14,6 +14,51 @@ body {
   min-width: 320px;
   background: #0b0d11;
 }
+.startup-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 35%, #18232a 0, transparent 42%), #0b0d11;
+}
+.startup-card {
+  width: min(440px, 100%);
+  padding: 42px;
+  border: 1px solid #293039;
+  background: rgba(16, 19, 24, 0.9);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+.startup-spinner {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 30px;
+  border: 2px solid #39434b;
+  border-top-color: #d9ff72;
+  border-radius: 50%;
+  animation: startup-spin 0.9s linear infinite;
+}
+.startup-card h1 {
+  margin: 0 0 12px;
+  color: #e8e9ed;
+  font-size: 30px;
+  letter-spacing: -0.05em;
+}
+.startup-card p {
+  margin: 0 0 24px;
+  color: #89929e;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.startup-status {
+  color: #d9ff72;
+  font: 10px "DM Mono";
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+@keyframes startup-spin {
+  to { transform: rotate(360deg); }
+}
 button,
 input,
 select {
@@ -726,6 +771,12 @@ button {
   gap: 10px;
   margin-top: 18px;
 }
+.radar-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
 .radar-node {
   border: 1px solid #50663a;
   background: #11151a;
@@ -781,10 +832,7 @@ button {
   animation: radar-spin 1s linear infinite;
 }
 .floating-scan {
-  position: absolute;
-  right: calc(5vw + 22px);
-  top: 220px;
-  z-index: 3;
+  position: static;
 }
 @keyframes radar-spin {
   to {
@@ -840,6 +888,13 @@ button {
 @media (max-width: 800px) {
   .comparison-grid {
     grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 620px) {
+  .radar-heading-actions {
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
   }
 }
 .app-shell {

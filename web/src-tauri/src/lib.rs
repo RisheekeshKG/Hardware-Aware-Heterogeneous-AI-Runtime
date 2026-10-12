@@ -31,12 +31,14 @@ pub fn run() {
                 .sidecar("har-runtime-server")?
                 .args([
                     "worker",
+                    "--coordinator",
+                    "http://127.0.0.1:8000",
                     "--host",
                     "0.0.0.0",
                     "--port",
                     "9000",
                     "--advertise-url",
-                    "http://0.0.0.0:9000",
+                    "http://127.0.0.1:9000",
                     "--name",
                     "This device",
                 ])

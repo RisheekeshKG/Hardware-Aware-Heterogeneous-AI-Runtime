@@ -77,7 +77,13 @@ def _reachable_base_url(base_url: str) -> str:
     if parsed.hostname not in {"0.0.0.0", "127.0.0.1", "localhost"}:
         return base_url.rstrip("/")
     host = _lan_address()
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
     return urlunsplit((parsed.scheme or "http", host, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
+
+
+def _is_local_url(url: str) -> bool:
+    return urlsplit(url.rstrip("/")).hostname in {"127.0.0.1", "localhost"}
 
 
 def stable_node_id() -> str:
@@ -134,7 +140,7 @@ def capabilities() -> list[dict[str, Any]]:
 def join_host(request: WorkerJoinRequest) -> dict[str, Any]:
     configure_worker(
         coordinator=request.coordinator,
-        base_url=_worker_config["base_url"],
+        base_url=_worker_config["advertise_url"],
         name=request.name,
         node_id=request.node_id or stable_node_id(),
     )
@@ -167,9 +173,15 @@ def _registration_loop() -> None:
         "node_id": _worker_config["node_id"],
         "name": _worker_config["name"],
         "base_url": _worker_config["base_url"],
-        "capabilities": capabilities(),
+        "capabilities": [],
         "host": system_info(),
     }
+    try:
+        registration["capabilities"] = capabilities()
+    except Exception:
+        # Registration must remain available even if hardware probing is slow
+        # or a platform backend raises during startup.
+        pass
     while True:
         try:
             with httpx.Client(timeout=10.0) as client:
@@ -184,11 +196,14 @@ def configure_worker(*, coordinator: str | None, base_url: str, name: str | None
     global _discovery_beacon
     resolved_node_id = node_id or stable_node_id()
     resolved_name = name or socket.gethostname()
-    resolved_base_url = _reachable_base_url(base_url)
+    resolved_advertise_url = _reachable_base_url(base_url)
+    coordinator_is_local = bool(coordinator and _is_local_url(coordinator))
+    resolved_base_url = base_url.rstrip("/") if coordinator_is_local and _is_local_url(base_url) else resolved_advertise_url
     _worker_config.update(
         {
             "coordinator": coordinator or "",
             "base_url": resolved_base_url,
+            "advertise_url": resolved_advertise_url,
             "name": resolved_name,
             "node_id": resolved_node_id,
         }
@@ -198,9 +213,9 @@ def configure_worker(*, coordinator: str | None, base_url: str, name: str | None
             "role": "worker",
             "node_id": resolved_node_id,
             "name": resolved_name,
-            "base_url": resolved_base_url,
+            "base_url": resolved_advertise_url,
             "host": system_info(),
-            "capabilities": capabilities(),
+            "capabilities": [],
         }
     )
     _discovery_beacon.start()
