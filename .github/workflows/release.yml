@@ -41,14 +41,16 @@ jobs:
       - if: runner.os != 'Windows'
         run: ./scripts/build-sidecar.sh
       - run: npm ci --prefix web
-      - run: npm run desktop:build --prefix web
+      - if: runner.os == 'Windows'
+        run: npm run desktop:build --prefix web -- --bundles nsis
+      - if: runner.os != 'Windows'
+        run: npm run desktop:build --prefix web
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
           path: |
             web/src-tauri/binaries/*
             web/src-tauri/target/release/bundle/**/*.dmg
-            web/src-tauri/target/release/bundle/**/*.msi
             web/src-tauri/target/release/bundle/**/*.exe
             web/src-tauri/target/release/bundle/**/*.app.zip
 
