@@ -180,10 +180,8 @@ Create a native installer with:
 npm run desktop:build
 ```
 
-The release workflow builds the platform-specific Python runtime assets and
-publishes them with the installers. On first launch, the app downloads the
-matching runtime once, caches it in the user application data directory, and
-starts it automatically. Users do not need Python, Rust, or terminal commands.
+The release workflow builds the platform-specific Python runtime and embeds it
+in each installer. Users do not need Python, Rust, or terminal commands.
 
 Create a release by pushing a version tag:
 
@@ -192,9 +190,8 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow produces normal macOS and Windows installers plus the runtime
-assets used by first-run setup. The same app can also connect to remote LAN
-workers.
+The workflow produces normal macOS and Windows installers with the local
+runtime included. The same app can also connect to remote LAN workers.
 
 Every `har serve` instance starts as a Host and exposes `GET /api/session`.
 Workers join by coordinator URL; no pairing code is required:
