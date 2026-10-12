@@ -7,6 +7,7 @@ $Out = Join-Path $Root 'web/src-tauri/binaries'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 python -m PyInstaller --clean --noconfirm --onefile `
+  --noconsole `
   --name har-runtime-server `
   --paths src `
   src/har_runtime/desktop_entry.py

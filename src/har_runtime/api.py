@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import time
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -128,6 +130,16 @@ _session = {
 
 def configure_host_url(url: str | None) -> None:
     if url:
+        parsed = urlsplit(url.rstrip("/"))
+        host = parsed.hostname
+        if host in {"0.0.0.0", "127.0.0.1", "localhost"}:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                try:
+                    probe.connect(("8.8.8.8", 80))
+                    host = probe.getsockname()[0]
+                except OSError:
+                    host = socket.gethostbyname(socket.gethostname())
+            url = urlunsplit((parsed.scheme or "http", host, parsed.path, parsed.query, parsed.fragment))
         _session["host_url"] = url.rstrip("/")
 
 
