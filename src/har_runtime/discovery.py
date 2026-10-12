@@ -8,6 +8,8 @@ import threading
 import time
 from typing import Any
 
+import psutil
+
 DISCOVERY_PORT = 9471
 DISCOVERY_INTERVAL_SECONDS = 2.0
 
@@ -29,12 +31,30 @@ class DiscoveryBeacon:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             while not self._stop.is_set():
-                for target in ("255.255.255.255", "127.0.0.1"):
+                for target in _broadcast_targets():
                     try:
                         sock.sendto(message, (target, DISCOVERY_PORT))
                     except OSError:
                         pass
                 self._stop.wait(DISCOVERY_INTERVAL_SECONDS)
+
+
+def _broadcast_targets() -> set[str]:
+    """Return global, loopback, and interface-specific IPv4 broadcasts."""
+
+    targets = {"255.255.255.255", "127.0.0.1"}
+    for addresses in psutil.net_if_addrs().values():
+        for address in addresses:
+            if address.family != socket.AF_INET or not address.address or not address.netmask:
+                continue
+            try:
+                ip = int.from_bytes(socket.inet_aton(address.address), "big")
+                mask = int.from_bytes(socket.inet_aton(address.netmask), "big")
+                broadcast = ip | (~mask & 0xFFFFFFFF)
+                targets.add(socket.inet_ntoa(broadcast.to_bytes(4, "big")))
+            except OSError:
+                continue
+    return targets
 
 
 class DiscoveryRegistry:

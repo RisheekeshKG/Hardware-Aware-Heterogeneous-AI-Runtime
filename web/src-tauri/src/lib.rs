@@ -10,9 +10,27 @@ pub fn run() {
                 .sidecar("har-runtime-server")?
                 .args(["serve", "--host", "127.0.0.1", "--port", "8000"])
                 .spawn()?;
+            let (mut worker_events, _worker_child) = app
+                .shell()
+                .sidecar("har-runtime-server")?
+                .args([
+                    "worker",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "9000",
+                    "--advertise-url",
+                    "http://0.0.0.0:9000",
+                    "--name",
+                    "This device",
+                ])
+                .spawn()?;
 
             tauri::async_runtime::spawn(async move {
                 while let Some(_event) = events.recv().await {}
+            });
+            tauri::async_runtime::spawn(async move {
+                while let Some(_event) = worker_events.recv().await {}
             });
             Ok(())
         })

@@ -11,6 +11,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -58,6 +59,25 @@ _worker_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="har-wor
 _worker_config: dict[str, str] = {}
 _node_id_path = Path.home() / ".har-runtime" / "node-id"
 _discovery_beacon: DiscoveryBeacon | None = None
+
+
+def _lan_address() -> str:
+    """Find the local address used for outbound LAN traffic."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        try:
+            probe.connect(("8.8.8.8", 80))
+            return probe.getsockname()[0]
+        except OSError:
+            return socket.gethostbyname(socket.gethostname())
+
+
+def _reachable_base_url(base_url: str) -> str:
+    parsed = urlsplit(base_url.rstrip("/"))
+    if parsed.hostname not in {"0.0.0.0", "127.0.0.1", "localhost"}:
+        return base_url.rstrip("/")
+    host = _lan_address()
+    return urlunsplit((parsed.scheme or "http", host, parsed.path, parsed.query, parsed.fragment)).rstrip("/")
 
 
 def stable_node_id() -> str:
@@ -164,10 +184,11 @@ def configure_worker(*, coordinator: str | None, base_url: str, name: str | None
     global _discovery_beacon
     resolved_node_id = node_id or stable_node_id()
     resolved_name = name or socket.gethostname()
+    resolved_base_url = _reachable_base_url(base_url)
     _worker_config.update(
         {
             "coordinator": coordinator or "",
-            "base_url": base_url.rstrip("/"),
+            "base_url": resolved_base_url,
             "name": resolved_name,
             "node_id": resolved_node_id,
         }
@@ -177,7 +198,7 @@ def configure_worker(*, coordinator: str | None, base_url: str, name: str | None
             "role": "worker",
             "node_id": resolved_node_id,
             "name": resolved_name,
-            "base_url": base_url.rstrip("/"),
+            "base_url": resolved_base_url,
             "host": system_info(),
             "capabilities": capabilities(),
         }

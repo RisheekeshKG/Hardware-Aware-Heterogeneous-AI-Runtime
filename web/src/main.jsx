@@ -70,6 +70,7 @@ function App() {
                 "Workspace unavailable. Start the runtime and try again.",
               );
             const system = await systemResponse.json();
+            setError("");
             setLocalHost(system.host);
             setDevices(system.devices);
             setNodes(await nodeResponse.json());
@@ -108,6 +109,18 @@ function App() {
       const socket = new WebSocket(
         `${protocol}://${new URL(API).host}/api/runs/${data.id}/events`,
       );
+      const pollRun = async () => {
+        const statusResponse = await fetch(`${API}/api/runs/${data.id}`);
+        if (!statusResponse.ok) return;
+        const currentRun = await statusResponse.json();
+        setActiveRun(currentRun);
+        setRuns((current) =>
+          current.map((run) =>
+            run.id === currentRun.id ? currentRun : run,
+          ),
+        );
+        if (currentRun.status === "running") window.setTimeout(pollRun, 1000);
+      };
       socket.onmessage = (message) => {
         const eventData = JSON.parse(message.data);
         setActiveRun((current) => ({
@@ -139,10 +152,11 @@ function App() {
           socket.close();
         }
       };
-      socket.onerror = () =>
-        setError(
-          "Live progress is unavailable. The benchmark may still be running.",
-        );
+      socket.onerror = () => {
+        socket.close();
+        setError("");
+        pollRun();
+      };
     } catch (err) {
       setError(err.message);
     }
