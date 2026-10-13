@@ -1,6 +1,6 @@
 [package]
 name = "har-runtime"
-version = "0.1.8"
+version = "0.1.9"
 description = "Hardware-Aware AI Runtime desktop shell"
 edition = "2021"
 

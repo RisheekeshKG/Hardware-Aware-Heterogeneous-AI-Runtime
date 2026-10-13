@@ -46,7 +46,7 @@ jobs:
         run: |
           choco install innosetup --yes --no-progress
           npm run desktop:build --prefix web -- --no-bundle
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.8 scripts/windows-installer.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.9 scripts/windows-installer.iss
       - if: runner.os != 'Windows'
         run: npm run desktop:build --prefix web
       - uses: actions/upload-artifact@v4
