@@ -12,11 +12,21 @@ pub fn run() {
         .setup(|app| {
             use tauri_plugin_shell::ShellExt;
 
-            let runtime_dir = app
+            let bundled_runtime_dir = app
                 .path()
                 .resource_dir()?
                 .join("runtime")
                 .join("har-runtime-server");
+            let executable_runtime_dir = std::env::current_exe()?
+                .parent()
+                .ok_or("application executable has no parent directory")?
+                .join("runtime")
+                .join("har-runtime-server");
+            let runtime_dir = if bundled_runtime_dir.exists() {
+                bundled_runtime_dir
+            } else {
+                executable_runtime_dir
+            };
             let runtime_name = if cfg!(windows) {
                 "har-runtime-server.exe"
             } else {

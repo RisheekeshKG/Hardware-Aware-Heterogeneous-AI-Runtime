@@ -42,7 +42,11 @@ jobs:
         run: ./scripts/build-sidecar.sh
       - run: npm ci --prefix web
       - if: runner.os == 'Windows'
-        run: npm run desktop:build --prefix web -- --bundles nsis
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          npm run desktop:build --prefix web -- --no-bundle
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.8 scripts/windows-installer.iss
       - if: runner.os != 'Windows'
         run: npm run desktop:build --prefix web
       - uses: actions/upload-artifact@v4
