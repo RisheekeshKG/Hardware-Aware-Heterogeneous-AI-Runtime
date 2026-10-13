@@ -122,10 +122,15 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark"
 _discovery = DiscoveryRegistry()
 _session = {
     "session_id": uuid.uuid4().hex[:10],
-    "role": "host",
+    "role": os.getenv("HAR_RUNTIME_ROLE", "host"),
     "host_url": os.getenv("HAR_HOST_URL"),
     "created_at": datetime.now(timezone.utc).isoformat(),
 }
+
+
+@app.get("/api/runtime/role")
+def runtime_role() -> dict[str, str]:
+    return {"role": _session["role"]}
 
 
 def configure_host_url(url: str | None) -> None:

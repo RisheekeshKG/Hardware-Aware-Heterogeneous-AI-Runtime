@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { invoke } from "@tauri-apps/api/core";
 import "./styles.css";
 
 const API = import.meta.env.VITE_API_URL || "http://127.0.0.1:8000";
@@ -31,6 +32,8 @@ function App() {
   const [activeRun, setActiveRun] = useState(null);
   const [view, setView] = useState("benchmark");
   const [runtimeReady, setRuntimeReady] = useState(false);
+  const [runtimeRole, setRuntimeRole] = useState("host");
+  const [changingRole, setChangingRole] = useState(false);
   const [form, setForm] = useState({
     workload: "matmul",
     size: 1024,
@@ -55,14 +58,16 @@ function App() {
         fetch(`${API}/api/nodes`),
         fetch(`${API}/api/discovery`),
         fetch(`${API}/api/runs`),
+        fetch(`${API}/api/runtime/role`),
       ])
-        .then(async ([healthResponse, systemResponse, nodeResponse, discoveryResponse, runResponse]) => {
+        .then(async ([healthResponse, systemResponse, nodeResponse, discoveryResponse, runResponse, roleResponse]) => {
             if (
               !healthResponse.ok ||
               !systemResponse.ok ||
               !nodeResponse.ok ||
               !discoveryResponse.ok ||
-              !runResponse.ok
+              !runResponse.ok ||
+              !roleResponse.ok
             )
               throw new Error(
                 "Workspace unavailable. Start the runtime and try again.",
@@ -74,6 +79,7 @@ function App() {
             setNodes(await nodeResponse.json());
             setNearby(await discoveryResponse.json());
             setRuns(await runResponse.json());
+            setRuntimeRole((await roleResponse.json()).role || "host");
             runtimeReadyRef.current = true;
             setRuntimeReady(true);
           })
@@ -84,6 +90,20 @@ function App() {
     const refresh = window.setInterval(loadRuntimeState, 5000);
     return () => window.clearInterval(refresh);
   }, []);
+
+  const changeRuntimeRole = async (event) => {
+    const nextRole = event.target.value;
+    setChangingRole(true);
+    setError("");
+    try {
+      await invoke("set_runtime_role", { role: nextRole });
+      setRuntimeRole(nextRole);
+    } catch (err) {
+      setError(`Could not change runtime role: ${err}`);
+    } finally {
+      setChangingRole(false);
+    }
+  };
 
   if (!runtimeReady) {
     return (
@@ -251,6 +271,14 @@ function App() {
                   : "Run a workload, inspect the machine, and keep the result."}
             </p>
           </div>
+          <label className="role-picker">
+            <span>Runtime role</span>
+            <select value={runtimeRole} onChange={changeRuntimeRole} disabled={changingRole}>
+              <option value="host">Host</option>
+              <option value="worker">Worker</option>
+              <option value="standalone">Standalone</option>
+            </select>
+          </label>
         </header>
         {error && <div className="error-banner">{error}</div>}
         {view === "fabric" && (

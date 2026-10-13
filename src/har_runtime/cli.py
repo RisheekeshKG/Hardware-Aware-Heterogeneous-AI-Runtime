@@ -34,12 +34,15 @@ def serve(
     host: str = typer.Option("127.0.0.1", help="API bind address"),
     port: int = typer.Option(8000, min=1, max=65535, help="API port"),
     advertise_url: str | None = typer.Option(None, help="Host URL workers should use"),
+    role: str = typer.Option("host", help="Runtime role reported to the dashboard"),
 ) -> None:
     """Start the live API used by the dashboard."""
 
     import uvicorn
     from .api import configure_host_url
 
+    if role not in {"host", "worker", "standalone"}:
+        raise typer.BadParameter("Role must be host, worker, or standalone")
     configure_host_url(advertise_url)
     uvicorn.run("har_runtime.api:app", host=host, port=port, reload=False)
 
@@ -52,7 +55,7 @@ def host(
 ) -> None:
     """Start this device as a Host. Runtime servers are hosts by default."""
 
-    serve(host=host, port=port, advertise_url=advertise_url)
+    serve(host=host, port=port, advertise_url=advertise_url, role="host")
 
 
 @app.command()
@@ -63,6 +66,7 @@ def worker(
     advertise_url: str = typer.Option(..., help="URL the coordinator can reach, e.g. http://192.168.1.25:9000"),
     name: str | None = typer.Option(None, help="Human-readable node name"),
     node_id: str | None = typer.Option(None, help="Stable node identifier"),
+    allow_connections: bool = typer.Option(True, "--allow-connections/--deny-connections", help="Accept host join requests"),
 ) -> None:
     """Start a real PyTorch worker and register it with a coordinator."""
 
@@ -70,7 +74,13 @@ def worker(
 
     from .worker import configure_worker
 
-    configure_worker(coordinator=coordinator, base_url=advertise_url, name=name, node_id=node_id)
+    configure_worker(
+        coordinator=coordinator,
+        base_url=advertise_url,
+        name=name,
+        node_id=node_id,
+        allow_connections=allow_connections,
+    )
     uvicorn.run("har_runtime.worker:worker_app", host=host, port=port, reload=False)
 
 
@@ -137,6 +147,45 @@ def tree(
 
     result = run_workload(workload="tree", backend=backend, depth=depth, traversal_count=traversals, warmup_iterations=warmup, measured_iterations=iterations, seed=seed)
     typer.echo(f"tree traversal on {result.device.device_name}: {result.metrics['median_traversals_per_second']:.3f} traversals/sec; correctness passed")
+
+
+@app.command()
+def discover() -> None:
+    """List HAR workers currently visible on the local network."""
+
+    import time
+
+    from .discovery import DiscoveryRegistry
+
+    registry = DiscoveryRegistry()
+    time.sleep(2.2)
+    nodes = registry.list_nodes()
+    if not nodes:
+        typer.echo("No HAR workers discovered.")
+        return
+    for node in nodes:
+        typer.echo(f"{node.get('node_id')}: {node.get('base_url')} | {node.get('name', 'worker')}")
+
+
+@app.command()
+def connect(
+    host_url: str = typer.Option(..., "--host", help="Host API URL"),
+    worker_url: str = typer.Option(..., "--worker", help="Worker API URL"),
+    name: str | None = typer.Option(None, help="Optional worker name"),
+    node_id: str = typer.Option("", help="Optional stable worker ID"),
+) -> None:
+    """Ask a worker to join a host without using the dashboard."""
+
+    import httpx
+
+    response = httpx.post(
+        f"{worker_url.rstrip('/')}/worker/join",
+        json={"coordinator": host_url.rstrip("/"), "name": name or "", "node_id": node_id},
+        timeout=10.0,
+    )
+    if response.is_error:
+        raise typer.ClickException(response.text or f"Worker rejected connection ({response.status_code})")
+    typer.echo(response.text)
 
 
 if __name__ == "__main__":

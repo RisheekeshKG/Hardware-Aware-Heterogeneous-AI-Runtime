@@ -207,6 +207,25 @@ button {
   margin: 0;
   font-size: 14px;
 }
+.role-picker {
+  display: grid;
+  gap: 8px;
+  min-width: 170px;
+  color: #7f8792;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.role-picker select {
+  border: 1px solid #343b45;
+  border-radius: 8px;
+  background: #171b20;
+  color: #f2f4f5;
+  padding: 10px 12px;
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
 .error-banner {
   color: #ff9f72;
   border: 1px solid #633626;

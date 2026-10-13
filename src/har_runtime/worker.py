@@ -128,7 +128,11 @@ def _execute(record: WorkerRun) -> None:
 
 @worker_app.get("/worker/health")
 def worker_health() -> dict[str, str]:
-    return {"status": "ok", "node_id": _worker_config.get("node_id", "unconfigured")}
+    return {
+        "status": "ok",
+        "node_id": _worker_config.get("node_id", "unconfigured"),
+        "accepting_connections": str(_worker_config.get("allow_connections", True)).lower(),
+    }
 
 
 @worker_app.get("/worker/capabilities")
@@ -138,6 +142,8 @@ def capabilities() -> list[dict[str, Any]]:
 
 @worker_app.post("/worker/join")
 def join_host(request: WorkerJoinRequest) -> dict[str, Any]:
+    if not _worker_config.get("allow_connections", True):
+        raise HTTPException(status_code=403, detail="Worker is not accepting host connections")
     configure_worker(
         coordinator=request.coordinator,
         base_url=_worker_config["advertise_url"],
@@ -192,7 +198,14 @@ def _registration_loop() -> None:
         time.sleep(5)
 
 
-def configure_worker(*, coordinator: str | None, base_url: str, name: str | None = None, node_id: str | None = None) -> None:
+def configure_worker(
+    *,
+    coordinator: str | None,
+    base_url: str,
+    name: str | None = None,
+    node_id: str | None = None,
+    allow_connections: bool = True,
+) -> None:
     global _discovery_beacon
     resolved_node_id = node_id or stable_node_id()
     resolved_name = name or socket.gethostname()
@@ -206,6 +219,7 @@ def configure_worker(*, coordinator: str | None, base_url: str, name: str | None
             "advertise_url": resolved_advertise_url,
             "name": resolved_name,
             "node_id": resolved_node_id,
+            "allow_connections": allow_connections,
         }
     )
     _discovery_beacon = DiscoveryBeacon(
