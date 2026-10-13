@@ -12,9 +12,21 @@ pub fn run() {
         .setup(|app| {
             use tauri_plugin_shell::ShellExt;
 
+            let runtime_dir = app
+                .path()
+                .resource_dir()?
+                .join("runtime")
+                .join("har-runtime-server");
+            let runtime_name = if cfg!(windows) {
+                "har-runtime-server.exe"
+            } else {
+                "har-runtime-server"
+            };
+            let runtime = runtime_dir.join(runtime_name);
+
             let (mut events, host_child) = app
                 .shell()
-                .sidecar("har-runtime-server")?
+                .command(&runtime)
                 .args([
                     "serve",
                     "--host",
@@ -28,7 +40,7 @@ pub fn run() {
                 .spawn()?;
             let (mut worker_events, worker_child) = app
                 .shell()
-                .sidecar("har-runtime-server")?
+                .command(&runtime)
                 .args([
                     "worker",
                     "--coordinator",

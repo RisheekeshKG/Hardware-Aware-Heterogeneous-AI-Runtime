@@ -49,7 +49,6 @@ jobs:
         with:
           name: desktop-${{ matrix.os }}
           path: |
-            web/src-tauri/binaries/*
             web/src-tauri/target/release/bundle/**/*.dmg
             web/src-tauri/target/release/bundle/**/*.exe
             web/src-tauri/target/release/bundle/**/*.app.zip
