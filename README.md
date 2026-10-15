@@ -1,63 +1,196 @@
 # HAR Runtime
 
-HAR Runtime is a hardware-aware compute workspace for running repeatable AI
-benchmarks across CPU, Apple MPS, and NVIDIA CUDA devices. Use the desktop app
-for a visual control room or the `har` command for headless machines, scripts,
-and remote workers.
+**HAR (Hardware-Aware Runtime)** is a high-performance compute workspace designed for running repeatable, hardware-aware AI benchmarks across **CPU**, **Apple MPS**, and **NVIDIA CUDA** devices.
 
-## Product Overview
+HAR operates as a standalone execution environment or as a LAN compute cluster—offering a desktop visual control room alongside a headless CLI (`har`) for automation, remote workers, and headless servers.
 
-HAR turns a group of machines on one trusted LAN into a small compute fabric:
+---
 
-- Inspect real hardware and runtime capabilities.
-- Run deterministic `matmul`, `image`, and `tree` workloads.
-- Compare latency, throughput, correctness, and network round-trip time.
-- Connect remote workers explicitly instead of silently discovering or using them.
-- Keep the same workflow on macOS, Windows, and Linux.
+## Architecture & System Flow
 
-HAR does not pretend that hardware is available. If a requested backend is not
-installed or supported, the run fails with an explicit reason.
+HAR turns local area network (LAN) machines into an explicit compute fabric without implicit or silent background execution.
 
-## Desktop App
+```mermaid
+flowchart TB
+    classDef hostStyle fill:#17210f,stroke:#d9ff72,stroke-width:2px,color:#e8e9ed;
+    classDef workerStyle fill:#111822,stroke:#71c8ff,stroke-width:2px,color:#e8e9ed;
+    classDef udpStyle fill:#1f1624,stroke:#c29cff,stroke-width:2px,color:#e8e9ed;
+    classDef standaloneStyle fill:#241b11,stroke:#ffbf72,stroke-width:2px,color:#e8e9ed;
 
-The packaged desktop app includes its Python runtime. Users do not need Python,
-Rust, Node.js, or a terminal to run the application.
+    subgraph HostNode [" Host Machine (Coordinator) "]
+        HostAPI["Host API Service<br/>(TCP Port 8000)"]:::hostStyle
+        HostUI["Desktop Control Room / Dashboard"]:::hostStyle
+        HostLocalWorker["Host Local Worker"]:::hostStyle
+    end
 
-Each desktop app starts in **Host** mode by default. Change the role from the
-Runtime role control:
+    subgraph WorkerNodes [" Remote Worker Nodes "]
+        Worker1["GPU Worker Node 1<br/>(TCP Port 9000)"]:::workerStyle
+        Worker2["Apple MPS Worker Node 2<br/>(TCP Port 9000)"]:::workerStyle
+    end
 
-- **Host** exposes the coordinator to the LAN and runs this machine's worker.
-- **Worker** keeps the dashboard local and exposes this machine as a
-  discoverable worker for another host.
-- **Standalone** keeps the dashboard and services local without advertising a
-  worker.
+    subgraph DiscoveryLayer [" Discovery Protocol "]
+        UDPBroadcast["UDP Broadcast Discovery<br/>(Port 9471)"]:::udpStyle
+    end
 
-Changing the role restarts only the managed runtime services. A discovered
-worker is never connected automatically. A host must explicitly select it and
-request a connection.
+    subgraph StandaloneNode [" Standalone Mode "]
+        StandaloneApp["Local GUI & Engine<br/>(Isolated / Offline)"]:::standaloneStyle
+    end
 
-## Headless CLI
+    HostUI -->|Manage & Query| HostAPI
+    HostAPI -->|Run Workloads| HostLocalWorker
+    HostAPI -->|Explicit TCP Job Dispatch| Worker1
+    HostAPI -->|Explicit TCP Job Dispatch| Worker2
 
-Install the package in a virtual environment or with `pipx`:
+    Worker1 -.-|Announce Availability| UDPBroadcast
+    Worker2 -.-|Announce Availability| UDPBroadcast
+    UDPBroadcast -.-|Discoverable Workers| HostAPI
+
+    class HostNode,WorkerNodes,DiscoveryLayer,StandaloneNode default
+```
+
+### Benchmark Execution Pipeline
+
+```mermaid
+flowchart LR
+    classDef initStyle fill:#1a1d24,stroke:#89929e,stroke-width:1.5px,color:#e8e9ed;
+    classDef validateStyle fill:#1f1624,stroke:#c29cff,stroke-width:1.5px,color:#e8e9ed;
+    classDef execStyle fill:#17210f,stroke:#d9ff72,stroke-width:2px,color:#e8e9ed;
+    classDef resultStyle fill:#111822,stroke:#71c8ff,stroke-width:1.5px,color:#e8e9ed;
+    classDef errStyle fill:#24150f,stroke:#ff9f72,stroke-width:1.5px,color:#e8e9ed;
+
+    Start([Start Benchmark Run]):::initStyle --> DetectHw[Detect Hardware & Memory]:::initStyle
+    DetectHw --> CheckBackend{Backend Available?}:::validateStyle
+
+    CheckBackend -- No --> FailRun[Fail with Explicit Reason]:::errStyle
+    CheckBackend -- Yes --> Warmup[Run Warmup Iterations]:::execStyle
+
+    Warmup --> MeasuredRun[Execute Measured Iterations]:::execStyle
+    MeasuredRun --> Verify[Verify Tensor Correctness]:::execStyle
+
+    Verify --> RecordMetrics[Calculate Latency, Throughput & RTT]:::resultStyle
+    RecordMetrics --> Export[Export Results JSON / CSV / UI]:::resultStyle
+```
+
+---
+
+## User Guide
+
+### 1. Desktop Application Control Room
+
+The packaged Desktop Application provides a visual control room for monitoring hardware, dispatching benchmarks, and analyzing metrics. It ships with a self-contained runtime environment—**no Python, Rust, or Node.js installation is required**.
+
+#### Operating Modes
+| Mode | Description | LAN Visibility |
+| :--- | :--- | :--- |
+| **Host** *(Default)* | Exposes the coordinator service to the LAN and manages local/remote benchmark execution. | Fully visible & listens for remote workers. |
+| **Worker** | Keeps the dashboard local and advertises this machine as a discoverable worker node for a Host. | Advertises worker presence on UDP `9471`. |
+| **Standalone** | Keeps all services, engine execution, and dashboards strictly local. | Fully offline / Isolated. |
+
+> **Explicit Connection Policy**: HAR never automatically connects to discovered workers. Host operators must manually select and request connections to remote workers.
+
+---
+
+### 2. Supported Workloads & Benchmarks
+
+HAR tests compute performance across deterministic tensor workloads:
+
+| Workload | Backend Options | Primary Metric | Description |
+| :--- | :--- | :--- | :--- |
+| **`matmul`** | `cpu`, `mps`, `cuda` | **TFLOP/s** | Seeded dense matrix multiplication (`N x N` FP32 matrices). |
+| **`image`** | `cpu`, `mps`, `cuda` | **images/second** | Seeded CNN tensor-backed inference workload. |
+| **`tree`** | `cpu`, `mps`, `cuda` | **traversals/second** | Seeded tensor-backed tree structure traversal. |
+
+Each benchmark execution records:
+- **Hardware Profile**: Device name, memory capacity (measured/estimated), and backend capabilities.
+- **Latency**: Min, max, median, and iteration distributions in seconds.
+- **Throughput**: Calculated compute throughput based on workload size.
+- **Network RTT**: Measured round-trip latency when executing jobs on remote workers.
+- **Correctness**: Pass/Fail assertion using reference computations.
+
+---
+
+## HAR CLI
+
+The `har` command-line tool enables headless benchmark runs, automated scripts, and remote worker node provisioning.
+
+### Installation
+
+Install `har` in a Python virtual environment or using `pipx`:
 
 ```bash
+# Option 1: Virtual Environment
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install '.[test]'
+python -m pip install .
+
+# Option 2: Isolated installation with pipx
+pipx install .
 ```
 
-The package installs the `har` command:
+---
+
+### CLI Command Reference
+
+#### Hardware Discovery
+Inspect local hardware capabilities and memory availability across `cpu`, `mps`, and `cuda`:
 
 ```bash
 har devices
+```
+
+*Sample Output:*
+```text
+cpu: available | 13th Gen Intel(R) Core(TM) i9-13900K
+  memory available: 67108864000 bytes (measured)
+cuda: available | NVIDIA GeForce RTX 4090
+  memory available: 25757220864 bytes (measured)
+mps: unavailable | Apple Silicon MPS unsupported on Linux
+  reason: MPS backend requires macOS with Apple Silicon
+```
+
+---
+
+#### Running Local Benchmarks
+
+##### 1. Dense Matrix Multiplication (`matmul`)
+```bash
+# Basic CPU benchmark
 har benchmark matmul --size 2048 --backend cpu
-har benchmark matmul --size 2048 --backend cuda --json results/cuda.json
+
+# Run on NVIDIA CUDA with warmups, iterations, seed, and JSON output
+har benchmark matmul \
+  --size 4096 \
+  --backend cuda \
+  --warmup 5 \
+  --iterations 20 \
+  --seed 1337 \
+  --json results/cuda_run.json \
+  --csv results/cuda_run.csv
+```
+
+##### 2. Image Inference Workload (`image`)
+```bash
+har benchmark image --backend cuda --batch-size 16 --image-size 64
+```
+
+##### 3. Tree Traversal Workload (`tree`)
+```bash
+har benchmark tree --backend cpu --depth 14 --traversals 8192
+```
+
+---
+
+#### Cluster & Remote Worker Commands
+
+##### Discover Workers on Network
+Scan the LAN for available HAR worker nodes via UDP broadcast:
+```bash
 har discover
 ```
 
-Start a LAN host:
-
+##### Start a LAN Host (Coordinator)
+Start a coordinator node accessible to LAN workers:
 ```bash
 har host \
   --host 0.0.0.0 \
@@ -65,93 +198,96 @@ har host \
   --advertise-url http://192.168.1.10:8000
 ```
 
-Start a worker that waits for an explicit host connection:
-
+##### Start a Remote Worker Node
+Run a headless machine as an available worker waiting for host connections:
 ```bash
 har worker \
+  --host 0.0.0.0 \
+  --port 9000 \
   --advertise-url http://192.168.1.20:9000 \
-  --name gpu-worker
+  --name gpu-worker-01
 ```
 
-Connect the worker without a dashboard:
-
-```bash
-har connect \
-  --host http://192.168.1.10:8000 \
-  --worker http://192.168.1.20:9000 \
-  --name gpu-worker
-```
-
-Or register it directly when provisioning a machine:
-
+##### Register Worker Directly to Coordinator
+Provision a worker node that registers immediately with a specific host:
 ```bash
 har worker \
   --coordinator http://192.168.1.10:8000 \
   --advertise-url http://192.168.1.20:9000 \
-  --name gpu-worker \
-  --node-id gpu-worker-01
+  --name gpu-node-02 \
+  --node-id gpu-node-02
 ```
 
-Disable worker consent when a machine should be visible but not joinable:
+##### Explicitly Connect Host to Worker
+Initiate connection from host to worker without the web dashboard:
+```bash
+har connect \
+  --host http://192.168.1.10:8000 \
+  --worker http://192.168.1.20:9000 \
+  --name gpu-worker-01
+```
 
+##### Disable Worker Consent (Visible but Deny Join Requests)
 ```bash
 har worker \
   --advertise-url http://192.168.1.20:9000 \
   --deny-connections
 ```
 
-## Networking
+---
 
-HAR uses two protocols for two different jobs:
+## Networking & Security
 
-- UDP `9471` broadcasts worker discovery on the local network. It is fast,
-  connectionless, and supports broadcast without knowing every machine first.
-- TCP/HTTP `8000` carries host API requests, registration, heartbeats, and job
-  routing.
-- TCP/HTTP `9000` carries worker join requests, benchmark execution, and result
-  polling.
+HAR uses targeted protocols for network communication:
 
-UDP is never used for benchmark data or result delivery. TCP is used wherever
-  ordering, delivery, and request/response errors matter.
+| Protocol | Port | Purpose |
+| :--- | :--- | :--- |
+| **UDP Broadcast** | `9471` | Fast, connectionless LAN worker discovery. (Never carries benchmark data or results). |
+| **TCP / HTTP** | `8000` | Host Coordinator API, dashboard communications, heartbeats, and job orchestration. |
+| **TCP / HTTP** | `9000` | Worker join endpoints, benchmark job execution, and metric result polling. |
 
-On Windows, allow UDP `9471`, the host TCP port `8000`, and the worker TCP port
-`9000` through the firewall when connecting across machines. Use HAR only on a
-trusted network; authentication and job isolation are not included yet.
+### Firewall Configuration
+When operating across multiple physical nodes:
+- **Windows**: Allow incoming/outgoing traffic for UDP `9471`, Host TCP `8000`, and Worker TCP `9000`.
+- **Linux (`ufw`)**:
+  ```bash
+  sudo ufw allow 9471/udp
+  sudo ufw allow 8000/tcp
+  sudo ufw allow 9000/tcp
+  ```
 
-## Supported Workloads
+> **Security Note**: Use HAR within trusted local networks. Authentication, encryption, and multi-tenant job isolation are not included in the current version.
 
-- `matmul`: seeded dense matrix multiplication, reported in TFLOP/s.
-- `image`: seeded tensor-backed image inference, reported in images/second.
-- `tree`: seeded tensor-backed traversal, reported in traversals/second.
+---
 
-Runs record the workload, backend, seed, timing configuration, device identity,
-correctness, and measured network round-trip time. Results can be exported as
-JSON or CSV.
+## Development & Testing
 
-## Development
-
-Run the test suite:
-
+### Running Tests
+Execute the Python test suite:
 ```bash
-pytest
+python3 -m pytest
 ```
 
-Run the dashboard locally:
+### Dashboard Development
+Run the Host API alongside the frontend dev server:
 
 ```bash
-har host --host 0.0.0.0 --advertise-url http://<host-ip>:8000
+# Terminal 1: Start Host API
+har host --host 0.0.0.0 --advertise-url http://127.0.0.1:8000
+
+# Terminal 2: Start Vite Dev Server
 cd web
 npm ci
 npm run dev
 ```
 
-Build the desktop shell:
+### Packaging Desktop Installers
+Build the desktop app shell using Tauri and PyInstaller:
 
 ```bash
 cd web
 npm run desktop:build
 ```
 
-The release workflow creates macOS and Windows installers with the platform
-runtime included. Windows uses Inno Setup because the CUDA-enabled onedir
-runtime is too large for the legacy NSIS compiler data-block limits.
+- **macOS**: Generates bundle installers containing embedded macOS Python runtime binaries.
+- **Windows**: Generates an Inno Setup installer containing CUDA-enabled executable runtimes.
