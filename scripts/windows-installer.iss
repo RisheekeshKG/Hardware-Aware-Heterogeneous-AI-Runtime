@@ -21,7 +21,6 @@ UninstallDisplayIcon={app}\{#AppExeName}
 
 [Files]
 Source: "..\web\src-tauri\target\release\har-runtime.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\web\src-tauri\runtime\har-runtime-server\*"; DestDir: "{app}\runtime\har-runtime-server"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

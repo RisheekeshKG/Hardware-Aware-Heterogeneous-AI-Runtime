@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { invoke } from '@tauri-apps/api/core'
 import './styles.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
@@ -29,6 +30,7 @@ const formatDuration = (seconds) => {
 const formatDate = (value) => value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unavailable'
 
 function App() {
+  const [runtimeSetup, setRuntimeSetup] = useState({ checking: true, installed: true, target: '', asset: '', error: '' })
   const [view, setView] = useState('runtime')
   const [runtime, setRuntime] = useState({ devices: [], nodes: [], runs: [] })
   const [scripts, setScripts] = useState([])
@@ -40,6 +42,17 @@ function App() {
   const [showScriptLauncher, setShowScriptLauncher] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [toast, setToast] = useState('')
+
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) {
+      setRuntimeSetup((current) => ({ ...current, checking: false }))
+      return undefined
+    }
+    invoke('runtime_status')
+      .then((status) => setRuntimeSetup({ ...status, checking: false, error: '' }))
+      .catch((setupError) => setRuntimeSetup((current) => ({ ...current, checking: false, error: setupError.toString() })))
+    return undefined
+  }, [])
 
   const loadRuntime = async () => {
     try {
@@ -58,10 +71,11 @@ function App() {
   }
 
   useEffect(() => {
+    if (runtimeSetup.checking || !runtimeSetup.installed) return undefined
     loadRuntime()
     const refresh = window.setInterval(loadRuntime, 3000)
     return () => window.clearInterval(refresh)
-  }, [])
+  }, [runtimeSetup.checking, runtimeSetup.installed])
 
   useEffect(() => {
     if (!selectedRunId) { setTrace(null); return undefined }
@@ -102,6 +116,10 @@ function App() {
   const activeRun = runtime.runs.find((run) => ['running', 'queued'].includes(run.status)) || selectedRun
   const pageLabel = navItems.find((item) => item.id === view)?.label || 'Runtime'
 
+  if (runtimeSetup.checking || !runtimeSetup.installed) {
+    return <RuntimeSetup status={runtimeSetup} onInstalled={(status) => setRuntimeSetup({ ...status, checking: false, error: '' })} />
+  }
+
   return <div className="app-shell">
     <aside className="sidebar">
       <div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div>
@@ -126,6 +144,25 @@ function App() {
     {showConnect && <ConnectDevice onClose={() => setShowConnect(false)} onConnected={async () => { setShowConnect(false); notify('Device connection requested.'); await loadRuntime() }} />}
     {toast && <div className="toast"><span className="status-dot" />{toast}</div>}
   </div>
+}
+
+function RuntimeSetup({ status, onInstalled }) {
+  const [installing, setInstalling] = useState(false)
+  const [error, setError] = useState(status.error || '')
+  const install = async () => {
+    setInstalling(true)
+    setError('')
+    try {
+      const installed = await invoke('install_runtime')
+      await invoke('start_runtime')
+      onInstalled(installed)
+    } catch (installError) {
+      setError(installError.toString())
+    } finally {
+      setInstalling(false)
+    }
+  }
+  return <div className="runtime-setup"><div className="runtime-setup-card"><div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div><div className="eyebrow">ONE-TIME SETUP</div><h1>Prepare this computer</h1><p>HAR will download the compute runtime matched to this computer. The desktop app stays small, and the runtime is reused after setup.</p><div className="setup-detail"><span>Detected target</span><strong>{status.target || 'This computer'}</strong></div><div className="setup-detail"><span>Download</span><strong>{status.asset || 'Hardware-matched runtime'}</strong></div>{error && <div className="form-error">{error}</div>}<button className="primary-button setup-button" onClick={install} disabled={installing}>{installing ? 'Downloading runtime...' : 'Download runtime'}<span>-&gt;</span></button><small className="setup-footnote">Download size depends on the detected hardware.</small></div></div>
 }
 
 function PageHeader({ eyebrow, title, description, action }) { return <div className="page-header"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div> }
