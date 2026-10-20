@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::CommandChild;
 
-const RUNTIME_RELEASE_TAG: &str = "v0.3.0";
+const RUNTIME_RELEASE_TAG: &str = "v0.3.1";
 const RUNTIME_REPOSITORY: &str = "RisheekeshKG/Hardware-Aware-Heterogeneous-AI-Runtime";
 
 struct RuntimeProcesses(Mutex<Vec<CommandChild>>);
