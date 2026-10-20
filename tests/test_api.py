@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+import time
 
 from har_runtime.api import app
 
@@ -74,3 +75,29 @@ def test_manual_connect_request_accepts_only_worker_url():
 
     request = NodeConnectRequest(worker_url="http://127.0.0.1:9000")
     assert request.name is None
+
+
+def test_python_script_run_is_managed_and_captures_output():
+    client = TestClient(app)
+    response = client.post(
+        "/api/scripts",
+        json={"filename": "hello.py", "content": "print('hello from har')"},
+    )
+    assert response.status_code == 202
+    script_id = response.json()["id"]
+    for _ in range(20):
+        result = client.get(f"/api/scripts/{script_id}").json()
+        if result["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.01)
+    assert result["status"] == "completed"
+    assert "hello from har" in result["output"]
+
+
+def test_python_script_rejects_non_python_filename():
+    client = TestClient(app)
+    response = client.post(
+        "/api/scripts",
+        json={"filename": "run.sh", "content": "echo unsafe"},
+    )
+    assert response.status_code == 422

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import os
+from pathlib import Path
+import runpy
 import socket
+import sys
+import tempfile
 import time
 import threading
 import uuid
@@ -64,6 +70,13 @@ class NodeRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
+class ScriptRunRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=160)
+    content: str = Field(min_length=1, max_length=1_000_000)
+    args: list[str] = Field(default_factory=list, max_length=32)
+    target_node: str = "local"
+
+
 class RunRecord:
     def __init__(self, request: MatmulRunRequest) -> None:
         self.id = uuid.uuid4().hex[:12]
@@ -101,6 +114,42 @@ class RunRecord:
             "network_round_trip_ms": self.network_round_trip_ms,
         }
 
+    def trace_snapshot(self) -> dict[str, Any]:
+        """Expose measured workload phases without inventing kernel telemetry."""
+
+        latency_seconds = (self.result or {}).get("latency_seconds", {}).get("median")
+        operations = [
+            {
+                "name": self.request.workload,
+                "type": "compute",
+                "backend": self.request.backend,
+                "duration_seconds": latency_seconds,
+                "measured": latency_seconds is not None,
+                "status": self.status,
+            }
+        ]
+        if self.request.target_node != "local":
+            operations.insert(
+                0,
+                {
+                    "name": "remote_dispatch",
+                    "type": "transfer",
+                    "backend": "network",
+                    "duration_seconds": self.network_round_trip_ms / 1000 if self.network_round_trip_ms is not None else None,
+                    "measured": self.network_round_trip_ms is not None,
+                    "status": self.status,
+                },
+            )
+        return {
+            "run_id": self.id,
+            "status": self.status,
+            "workload": self.request.workload,
+            "backend": self.request.backend,
+            "target_node": self.request.target_node,
+            "operations": operations,
+            "result": self.result,
+        }
+
 
 app = FastAPI(title="Hardware-Aware AI Runtime API", version="0.2.0")
 _cors_origins = [
@@ -119,6 +168,71 @@ app.add_middleware(
 _runs: dict[str, RunRecord] = {}
 _nodes: dict[str, dict[str, Any]] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark")
+_script_runs: dict[str, "ScriptRecord"] = {}
+
+
+class ScriptRecord:
+    def __init__(self, request: ScriptRunRequest) -> None:
+        self.id = uuid.uuid4().hex[:12]
+        self.request = request
+        self.status = "queued"
+        self.output = ""
+        self.error: str | None = None
+        self.exit_code: int | None = None
+        self.created_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = self.created_at
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "status": self.status,
+            "filename": self.request.filename,
+            "args": self.request.args,
+            "target_node": self.request.target_node,
+            "output": self.output,
+            "error": self.error,
+            "exit_code": self.exit_code,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+def _validate_script_filename(filename: str) -> str:
+    path = Path(filename)
+    if path.name != filename or path.suffix.lower() != ".py":
+        raise ValueError("Choose a single Python file with a .py extension")
+    return path.name
+
+
+def _run_script_in_process(record: ScriptRecord) -> None:
+    """Run a user-approved file without invoking a shell command."""
+
+    record.status = "running"
+    record.updated_at = datetime.now(timezone.utc).isoformat()
+    try:
+        with tempfile.TemporaryDirectory(prefix="har-job-") as directory:
+            script_path = Path(directory) / record.request.filename
+            script_path.write_text(record.request.content, encoding="utf-8")
+            previous_argv = sys.argv
+            sys.argv = [str(script_path), *record.request.args]
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                    runpy.run_path(str(script_path), run_name="__main__")
+            finally:
+                sys.argv = previous_argv
+            record.output = output.getvalue()[-100_000:]
+            record.exit_code = 0
+            record.status = "completed"
+    except SystemExit as error:
+        record.exit_code = int(error.code) if isinstance(error.code, int) else 1
+        record.error = None if record.exit_code == 0 else str(error)
+        record.status = "completed" if record.exit_code == 0 else "failed"
+    except Exception as error:  # Keep user script failures visible to the app.
+        record.error = str(error)
+        record.status = "failed"
+    finally:
+        record.updated_at = datetime.now(timezone.utc).isoformat()
 _discovery = DiscoveryRegistry()
 _session = {
     "session_id": uuid.uuid4().hex[:10],
@@ -366,6 +480,67 @@ def connect_discovered_node(request: DiscoveryConnectRequest) -> dict[str, Any]:
     return {"status": "joining", "node_id": request.node_id, "name": request.name or node.get("name")}
 
 
+def _run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
+    import httpx
+
+    record.status = "running"
+    try:
+        with httpx.Client(timeout=30.0) as client:
+            response = client.post(f"{node['base_url']}/worker/scripts", json=record.request.model_dump())
+            response.raise_for_status()
+            worker_run_id = response.json()["id"]
+            node["active_job"] = record.id
+            while True:
+                worker_response = client.get(f"{node['base_url']}/worker/scripts/{worker_run_id}")
+                worker_response.raise_for_status()
+                worker_record = worker_response.json()
+                record.status = worker_record["status"]
+                record.output = worker_record.get("output", "")
+                record.error = worker_record.get("error")
+                record.exit_code = worker_record.get("exit_code")
+                if record.status in {"completed", "failed"}:
+                    break
+                time.sleep(0.25)
+    except Exception as error:
+        record.status = "failed"
+        record.error = f"Remote device '{record.request.target_node}' failed: {error}"
+    finally:
+        record.updated_at = datetime.now(timezone.utc).isoformat()
+        node["active_job"] = None
+
+
+@app.get("/api/scripts")
+def scripts() -> list[dict[str, Any]]:
+    return [record.snapshot() for record in reversed(list(_script_runs.values()))]
+
+
+@app.get("/api/scripts/{script_id}")
+def script_status(script_id: str) -> dict[str, Any]:
+    record = _script_runs.get(script_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Script run not found")
+    return record.snapshot()
+
+
+@app.post("/api/scripts", status_code=202)
+def start_script(request: ScriptRunRequest) -> dict[str, Any]:
+    try:
+        _validate_script_filename(request.filename)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    record = ScriptRecord(request)
+    _script_runs[record.id] = record
+    if request.target_node == "local":
+        _executor.submit(_run_script_in_process, record)
+    else:
+        node = _nodes.get(request.target_node)
+        if not node or node.get("status") != "online":
+            raise HTTPException(status_code=400, detail=f"Device '{request.target_node}' is not online")
+        _executor.submit(_run_remote_script, record, node)
+    return record.snapshot()
+
+
 @app.post("/api/nodes/{node_id}/rename")
 def rename_node(node_id: str, request: NodeRenameRequest) -> dict[str, Any]:
     node = _nodes.get(node_id)
@@ -389,6 +564,31 @@ def run_status(run_id: str) -> dict[str, Any]:
     if not record:
         raise HTTPException(status_code=404, detail="Run not found")
     return record.snapshot()
+
+
+@app.get("/api/runs/{run_id}/trace")
+def run_trace(run_id: str) -> dict[str, Any]:
+    record = _runs.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return record.trace_snapshot()
+
+
+@app.get("/api/runtime")
+def runtime_snapshot() -> dict[str, Any]:
+    """Return the live state needed by the desktop runtime console."""
+
+    visible_nodes = nodes()
+    if _session["role"] == "host":
+        # A host already exposes its own local devices. Do not show a stale
+        # worker registration from an older host launch as a second computer.
+        visible_nodes = [node for node in visible_nodes if node.get("name") != "This device"]
+    return {
+        "devices": [device.to_dict() for device in discover_devices()],
+        "nodes": visible_nodes,
+        "runs": [record.snapshot() for record in reversed(list(_runs.values()))],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.post("/api/runs", status_code=202)

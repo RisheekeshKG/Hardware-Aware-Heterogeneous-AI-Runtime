@@ -90,7 +90,9 @@ fn spawn_services(
         role,
     )?];
 
-    if role != "standalone" {
+    // The host already executes local workloads through its coordinator.
+    // Only a worker role needs the extra worker service process.
+    if role == "worker" {
         let mut worker_args = vec![
             "worker",
             "--host",

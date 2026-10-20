@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import contextlib
+import io
+import runpy
 import socket
+import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -17,7 +22,7 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from .api import MatmulRunRequest
+from .api import MatmulRunRequest, ScriptRunRequest
 from .benchmark import run_workload
 from .devices import discover_devices, get_device_info, system_info
 from .discovery import DiscoveryBeacon
@@ -47,6 +52,28 @@ class WorkerRun:
         }
 
 
+class WorkerScriptRun:
+    def __init__(self, request: ScriptRunRequest) -> None:
+        self.id = uuid.uuid4().hex[:12]
+        self.request = request
+        self.status = "queued"
+        self.output = ""
+        self.error: str | None = None
+        self.exit_code: int | None = None
+        self.created_at = datetime.now(timezone.utc).isoformat()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "status": self.status,
+            "filename": self.request.filename,
+            "output": self.output,
+            "error": self.error,
+            "exit_code": self.exit_code,
+            "created_at": self.created_at,
+        }
+
+
 class WorkerJoinRequest(BaseModel):
     coordinator: str
     name: str = ""
@@ -55,6 +82,7 @@ class WorkerJoinRequest(BaseModel):
 
 worker_app = FastAPI(title="Hardware-Aware AI Runtime Worker", version="0.2.0")
 _worker_runs: dict[str, WorkerRun] = {}
+_worker_script_runs: dict[str, WorkerScriptRun] = {}
 _worker_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="har-worker")
 _worker_config: dict[str, str] = {}
 _node_id_path = Path.home() / ".har-runtime" / "node-id"
@@ -126,6 +154,32 @@ def _execute(record: WorkerRun) -> None:
         record.status = "failed"
 
 
+def _execute_script(record: WorkerScriptRun) -> None:
+    record.status = "running"
+    try:
+        with tempfile.TemporaryDirectory(prefix="har-worker-job-") as directory:
+            script_path = Path(directory) / Path(record.request.filename).name
+            script_path.write_text(record.request.content, encoding="utf-8")
+            previous_argv = sys.argv
+            sys.argv = [str(script_path), *record.request.args]
+            output = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                    runpy.run_path(str(script_path), run_name="__main__")
+            finally:
+                sys.argv = previous_argv
+            record.output = output.getvalue()[-100_000:]
+            record.exit_code = 0
+            record.status = "completed"
+    except SystemExit as error:
+        record.exit_code = int(error.code) if isinstance(error.code, int) else 1
+        record.error = None if record.exit_code == 0 else str(error)
+        record.status = "completed" if record.exit_code == 0 else "failed"
+    except Exception as error:
+        record.error = str(error)
+        record.status = "failed"
+
+
 @worker_app.get("/worker/health")
 def worker_health() -> dict[str, str]:
     return {
@@ -162,6 +216,24 @@ def start_worker_run(request: MatmulRunRequest) -> dict[str, Any]:
     record = WorkerRun(request)
     _worker_runs[record.id] = record
     _worker_executor.submit(_execute, record)
+    return record.to_dict()
+
+
+@worker_app.post("/worker/scripts", status_code=202)
+def start_worker_script(request: ScriptRunRequest) -> dict[str, Any]:
+    if Path(request.filename).name != request.filename or Path(request.filename).suffix.lower() != ".py":
+        raise HTTPException(status_code=422, detail="Only a single .py file can be run")
+    record = WorkerScriptRun(request)
+    _worker_script_runs[record.id] = record
+    _worker_executor.submit(_execute_script, record)
+    return record.to_dict()
+
+
+@worker_app.get("/worker/scripts/{run_id}")
+def worker_script_status(run_id: str) -> dict[str, Any]:
+    record = _worker_script_runs.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Worker script run not found")
     return record.to_dict()
 
 

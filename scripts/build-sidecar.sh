@@ -8,10 +8,7 @@ TARGET="$(rustc -vV | awk '/^host:/ { print $2 }')"
 OUT="$ROOT/web/src-tauri/runtime"
 mkdir -p "$OUT"
 
-python3 -m PyInstaller --clean --noconfirm --onedir \
-  --name har-runtime-server \
-  --paths src \
-  src/har_runtime/desktop_entry.py
+python3 -m PyInstaller --clean --noconfirm har-runtime-server.spec
 
 rm -rf "$OUT/har-runtime-server"
 cp -R "dist/har-runtime-server" "$OUT/har-runtime-server"
