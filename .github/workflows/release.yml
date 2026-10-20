@@ -31,18 +31,9 @@ jobs:
       - run: python -m pip install -e ".[desktop]"
       - if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          python -m pip uninstall --yes torch
-          python -m pip install --upgrade --force-reinstall torch --index-url https://download.pytorch.org/whl/cu128
-          python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA runtime:', torch.version.cuda); assert torch.version.cuda, 'CUDA-enabled PyTorch was not installed'"
-      - if: runner.os == 'Windows'
-        shell: pwsh
         run: ./scripts/build-sidecar.ps1
       - if: runner.os != 'Windows'
         run: ./scripts/build-sidecar.sh
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: Compress-Archive -Path web/src-tauri/runtime/har-runtime-server -DestinationPath web/src-tauri/runtime/har-runtime-windows-x64-cuda.zip
       - if: runner.os != 'Windows'
         run: tar -czf web/src-tauri/runtime/har-runtime-macos-arm64.tar.gz -C web/src-tauri/runtime har-runtime-server
       - run: npm ci --prefix web
@@ -51,7 +42,7 @@ jobs:
         run: |
           choco install innosetup --yes --no-progress
            npm run desktop:build --prefix web -- --no-bundle
-           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.3.1 scripts/windows-installer.iss
+           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.3.2 scripts/windows-installer.iss
       - if: runner.os != 'Windows'
         run: npm run desktop:build --prefix web
       - uses: actions/upload-artifact@v4
