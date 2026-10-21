@@ -18,12 +18,11 @@ fn runtime_path(app: &AppHandle) -> Result<PathBuf, String> {
         "har-runtime-server"
     };
     if let Ok(cache_dir) = app.path().app_data_dir() {
-        let cached = cache_dir
-            .join("runtimes")
-            .join(runtime_target())
-            .join(runtime_name);
-        if cached.exists() {
-            return Ok(cached);
+        for target in runtime_targets() {
+            let cached = cache_dir.join("runtimes").join(target).join(runtime_name);
+            if cached.exists() {
+                return Ok(cached);
+            }
         }
     }
     let bundled_runtime_dir = app
@@ -62,6 +61,14 @@ fn runtime_target() -> &'static str {
     }
 }
 
+fn runtime_targets() -> Vec<&'static str> {
+    if cfg!(target_os = "windows") && has_nvidia_gpu() {
+        vec!["windows-x64-cuda", "windows-x64-cpu"]
+    } else {
+        vec![runtime_target()]
+    }
+}
+
 fn has_nvidia_gpu() -> bool {
     std::process::Command::new("nvidia-smi")
         .arg("--query-gpu=name")
@@ -71,11 +78,11 @@ fn has_nvidia_gpu() -> bool {
         .unwrap_or(false)
 }
 
-fn runtime_asset_name() -> String {
+fn runtime_asset_name(target: &str) -> String {
     if cfg!(windows) {
-        format!("har-runtime-{}.zip", runtime_target())
+        format!("har-runtime-{}.zip", target)
     } else {
-        format!("har-runtime-{}.tar.gz", runtime_target())
+        format!("har-runtime-{}.tar.gz", target)
     }
 }
 
@@ -103,7 +110,7 @@ fn runtime_status(app: AppHandle) -> RuntimeStatus {
     RuntimeStatus {
         installed: runtime_is_installed(&app),
         target: runtime_target().to_string(),
-        asset: runtime_asset_name(),
+        asset: runtime_asset_name(runtime_target()),
         downloading: false,
     }
 }
@@ -113,33 +120,44 @@ fn install_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
     if runtime_is_installed(&app) {
         return Ok(runtime_status(app));
     }
-    let destination = cached_runtime_dir(&app)?;
-    let parent = destination
+    let cache_dir = cached_runtime_dir(&app)?;
+    let parent = cache_dir
         .parent()
         .ok_or_else(|| "runtime cache has no parent directory".to_string())?;
     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let archive = parent.join(format!("{}.download", runtime_asset_name()));
-    let url = format!(
-        "https://github.com/{}/releases/download/{}/{}",
-        RUNTIME_REPOSITORY,
-        RUNTIME_RELEASE_TAG,
-        runtime_asset_name()
-    );
-    let response = reqwest::blocking::Client::new()
-        .get(url)
-        .send()
-        .map_err(|error| format!("runtime download failed: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "runtime download returned HTTP {}",
-            response.status()
-        ));
+    let client = reqwest::blocking::Client::new();
+    let mut downloaded = None;
+    for target in runtime_targets() {
+        let asset = runtime_asset_name(target);
+        let url = format!(
+            "https://github.com/{}/releases/download/{}/{}",
+            RUNTIME_REPOSITORY, RUNTIME_RELEASE_TAG, asset
+        );
+        let response = client
+            .get(url)
+            .send()
+            .map_err(|error| format!("runtime download failed: {error}"))?;
+        if response.status().is_success() {
+            let bytes = response
+                .bytes()
+                .map_err(|error| format!("could not read runtime download: {error}"))?;
+            downloaded = Some((target, asset, bytes));
+            break;
+        }
+        if response.status() != reqwest::StatusCode::NOT_FOUND {
+            return Err(format!(
+                "runtime download returned HTTP {}",
+                response.status()
+            ));
+        }
     }
-    let bytes = response
-        .bytes()
-        .map_err(|error| format!("could not read runtime download: {error}"))?;
+    let (target, asset, bytes) = downloaded.ok_or_else(|| {
+        "runtime download returned HTTP 404 for all compatible runtime assets".to_string()
+    })?;
+    let archive = parent.join(format!("{}.download", asset));
     std::fs::write(&archive, &bytes).map_err(|error| error.to_string())?;
-    let staging = parent.join(format!("{}.staging", runtime_target()));
+    let destination = parent.join(target);
+    let staging = parent.join(format!("{}.staging", target));
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
     }
