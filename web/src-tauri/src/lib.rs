@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager, RunEvent};
 use tauri_plugin_shell::process::CommandChild;
 
-const RUNTIME_RELEASE_TAG: &str = "v0.3.3";
+const RUNTIME_RELEASE_TAG: &str = "v0.3.4";
 const RUNTIME_REPOSITORY: &str = "RisheekeshKG/Hardware-Aware-Heterogeneous-AI-Runtime";
 
 struct RuntimeProcesses(Mutex<Vec<CommandChild>>);
@@ -138,10 +138,15 @@ fn install_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
             .send()
             .map_err(|error| format!("runtime download failed: {error}"))?;
         if response.status().is_success() {
-            let bytes = response
-                .bytes()
-                .map_err(|error| format!("could not read runtime download: {error}"))?;
-            downloaded = Some((target, asset, bytes));
+            let archive = parent.join(format!("{}.download", asset));
+            let mut archive_file =
+                std::fs::File::create(&archive).map_err(|error| error.to_string())?;
+            let mut response = response;
+            if let Err(error) = std::io::copy(&mut response, &mut archive_file) {
+                let _ = std::fs::remove_file(&archive);
+                return Err(format!("could not read runtime download: {error}"));
+            }
+            downloaded = Some((target, archive));
             break;
         }
         if response.status() != reqwest::StatusCode::NOT_FOUND {
@@ -151,11 +156,9 @@ fn install_runtime(app: AppHandle) -> Result<RuntimeStatus, String> {
             ));
         }
     }
-    let (target, asset, bytes) = downloaded.ok_or_else(|| {
+    let (target, archive) = downloaded.ok_or_else(|| {
         "runtime download returned HTTP 404 for all compatible runtime assets".to_string()
     })?;
-    let archive = parent.join(format!("{}.download", asset));
-    std::fs::write(&archive, &bytes).map_err(|error| error.to_string())?;
     let destination = parent.join(target);
     let staging = parent.join(format!("{}.staging", target));
     if staging.exists() {
