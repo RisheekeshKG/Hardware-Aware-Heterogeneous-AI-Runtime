@@ -9,6 +9,32 @@ from .benchmark import run_matmul, run_workload
 from .devices import BACKENDS, discover_devices
 from .exporters import write_csv, write_json
 
+def _exit_with_parent() -> None:
+    """Exit when the desktop app that launched this process is gone.
+
+    The app sets HAR_PARENT_PID; without this, a crashed or force-quit app
+    would leave the runtime holding ports 8000/9000 and block the next launch.
+    """
+
+    import os
+    import threading
+    import time
+
+    import psutil
+
+    try:
+        parent_pid = int(os.environ.get("HAR_PARENT_PID", ""))
+    except ValueError:
+        return
+
+    def watch() -> None:
+        while psutil.pid_exists(parent_pid):
+            time.sleep(2)
+        os._exit(0)
+
+    threading.Thread(target=watch, daemon=True, name="har-parent-watch").start()
+
+
 app = typer.Typer(help="Hardware-Aware Heterogeneous AI Runtime")
 benchmark_app = typer.Typer(help="Run benchmark workloads")
 app.add_typer(benchmark_app, name="benchmark")
@@ -39,11 +65,15 @@ def serve(
     """Start the live API used by the dashboard."""
 
     import uvicorn
-    from .api import configure_host_url
+    from .api import configure_host_url, configure_role, start_discovery
 
     if role not in {"host", "worker", "standalone"}:
         raise typer.BadParameter("Role must be host, worker, or standalone")
+    _exit_with_parent()
+    configure_role(role)
     configure_host_url(advertise_url)
+    if role == "host":
+        start_discovery()
     uvicorn.run("har_runtime.api:app", host=host, port=port, reload=False)
 
 
@@ -74,6 +104,7 @@ def worker(
 
     from .worker import configure_worker
 
+    _exit_with_parent()
     configure_worker(
         coordinator=coordinator,
         base_url=advertise_url,

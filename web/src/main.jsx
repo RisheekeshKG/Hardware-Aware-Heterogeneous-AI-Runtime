@@ -1,9 +1,12 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import './styles.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+// The desktop app launches the runtime itself; give it time to boot before reporting a failure.
+const RUNTIME_STARTUP_GRACE_MS = 20000
 const navItems = [
   { id: 'runtime', label: 'Overview', icon: 'O' },
   { id: 'workloads', label: 'Tasks', icon: 'T' },
@@ -42,6 +45,9 @@ function App() {
   const [showScriptLauncher, setShowScriptLauncher] = useState(false)
   const [showConnect, setShowConnect] = useState(false)
   const [toast, setToast] = useState('')
+  const [pairing, setPairing] = useState([])
+  const connectedOnce = useRef(false)
+  const startedAt = useRef(Date.now())
 
   useEffect(() => {
     if (!window.__TAURI_INTERNALS__) {
@@ -60,12 +66,16 @@ function App() {
       if (!runtimeResponse.ok || !scriptsResponse.ok) throw new Error('Runtime API returned an error')
       const data = await runtimeResponse.json()
       setScripts(await scriptsResponse.json())
+      fetch(`${API}/api/pairing`).then((response) => response.ok ? response.json() : []).then(setPairing).catch(() => setPairing([]))
       setRuntime(data)
       setError('')
+      connectedOnce.current = true
       setSelectedRunId((current) => current || data.runs[0]?.id || null)
+      setLoading(false)
     } catch (requestError) {
+      const stillStarting = window.__TAURI_INTERNALS__ && !connectedOnce.current && Date.now() - startedAt.current < RUNTIME_STARTUP_GRACE_MS
+      if (stillStarting) return
       setError(`${requestError.message}. Start the API with "har serve".`)
-    } finally {
       setLoading(false)
     }
   }
@@ -117,7 +127,7 @@ function App() {
   const pageLabel = navItems.find((item) => item.id === view)?.label || 'Runtime'
 
   if (runtimeSetup.checking || !runtimeSetup.installed) {
-    return <RuntimeSetup status={runtimeSetup} onInstalled={(status) => setRuntimeSetup({ ...status, checking: false, error: '' })} />
+    return <RuntimeSetup status={runtimeSetup} onInstalled={(status) => { startedAt.current = Date.now(); setRuntimeSetup({ ...status, checking: false, error: '' }) }} />
   }
 
   return <div className="app-shell">
@@ -132,6 +142,7 @@ function App() {
 
     <main className="main-content">
       <header className="topbar"><div className="breadcrumbs"><span>HAR</span><i>/</i><strong>{pageLabel}</strong></div><div className="topbar-actions"><span className="live-pill"><span className={`status-dot ${error ? 'error' : ''}`} /> {error ? 'Disconnected' : 'Live API'}</span><button className="icon-button" onClick={loadRuntime} aria-label="Refresh runtime">R</button></div></header>
+      {runtimeSetup.update_available && <RuntimeUpdate status={runtimeSetup} onUpdated={(status) => { startedAt.current = Date.now(); connectedOnce.current = false; setRuntimeSetup({ ...status, checking: false, error: '' }); notify('Runtime updated.') }} />}
       {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>Make sure the HAR service is running, then try again.</span></div><button onClick={loadRuntime}>Try again</button></div>}
       {view === 'runtime' && <RuntimeView devices={runtime.devices} nodes={runtime.nodes} runs={runtime.runs} activeRun={activeRun} onLaunch={() => setShowLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
       {view === 'workloads' && <WorkloadsView runs={runtime.runs} scripts={scripts} onLaunch={() => setShowLauncher(true)} onScriptLaunch={() => setShowScriptLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
@@ -142,15 +153,63 @@ function App() {
     {showLauncher && <Launcher devices={runtime.devices} nodes={runtime.nodes} onClose={() => setShowLauncher(false)} onSubmit={launchRun} />}
     {showScriptLauncher && <ScriptLauncher nodes={runtime.nodes} onClose={() => setShowScriptLauncher(false)} onSubmit={launchScript} />}
     {showConnect && <ConnectDevice onClose={() => setShowConnect(false)} onConnected={async () => { setShowConnect(false); notify('Device connection requested.'); await loadRuntime() }} />}
+    {pairing[0] && <PairingPrompt request={pairing[0]} onDecided={(decision) => { setPairing((current) => current.slice(1)); notify(decision === 'accept' ? 'Connection accepted. This computer will now take tasks from that host.' : 'Connection declined.'); loadRuntime() }} />}
     {toast && <div className="toast"><span className="status-dot" />{toast}</div>}
   </div>
 }
 
+function PairingPrompt({ request, onDecided }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const decide = async (decision) => {
+    setBusy(true); setError('')
+    try {
+      const response = await fetch(`${API}/api/pairing/${request.id}/${decision}`, { method: 'POST' })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.detail || 'Could not answer the request')
+      onDecided(decision)
+    } catch (decideError) { setError(decideError.message); setBusy(false) }
+  }
+  const host = (() => { try { return new URL(request.coordinator).hostname } catch { return request.client_ip } })()
+  return <div className="modal-backdrop"><div className="launcher-modal pairing-modal" role="alertdialog" aria-labelledby="pairing-title"><div className="modal-header"><div><div className="eyebrow">CONNECTION REQUEST</div><h2 id="pairing-title">Allow another computer to use this one?</h2></div></div><p>The HAR host at <strong>{host}</strong> wants to send tasks to this computer. Accepting lets it run Python files and benchmarks here. Only accept computers you trust.</p><div className="setup-detail"><span>Request from</span><strong>{request.client_ip}</strong></div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => decide('decline')} disabled={busy}>Decline</button><button type="button" className="primary-button" onClick={() => decide('accept')} disabled={busy}>Accept <span>-&gt;</span></button></div></div></div>
+}
+
+function RuntimeUpdate({ status, onUpdated }) {
+  const [updating, setUpdating] = useState(false)
+  const [progress, setProgress] = useState(null)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    const unlisten = listen('runtime-install-progress', (event) => setProgress(event.payload))
+    return () => { unlisten.then((stop) => stop()) }
+  }, [])
+  const update = async () => {
+    setUpdating(true); setError('')
+    try {
+      const updated = await invoke('install_runtime')
+      await invoke('start_runtime')
+      onUpdated(updated)
+    } catch (updateError) {
+      setError(updateError.toString())
+      invoke('start_runtime').catch(() => {})
+    } finally { setUpdating(false) }
+  }
+  const percent = progress?.total ? Math.round((progress.downloaded / progress.total) * 100) : null
+  const label = !updating ? 'Update runtime' : progress?.stage === 'extracting' ? 'Unpacking...' : percent != null ? `Downloading ${percent}%` : 'Downloading...'
+  return <div className="api-error runtime-update"><span className="status-dot" /><div><strong>Runtime update available</strong><span>{error || `This app needs runtime ${status.expected_version}; ${status.installed_version || 'an older version'} is installed. Tasks pause briefly while it restarts.`}</span></div><button onClick={update} disabled={updating}>{label}</button></div>
+}
+
 function RuntimeSetup({ status, onInstalled }) {
   const [installing, setInstalling] = useState(false)
+  const [progress, setProgress] = useState(null)
   const [error, setError] = useState(status.error || '')
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return undefined
+    const unlisten = listen('runtime-install-progress', (event) => setProgress(event.payload))
+    return () => { unlisten.then((stop) => stop()) }
+  }, [])
   const install = async () => {
     setInstalling(true)
+    setProgress(null)
     setError('')
     try {
       const installed = await invoke('install_runtime')
@@ -162,7 +221,11 @@ function RuntimeSetup({ status, onInstalled }) {
       setInstalling(false)
     }
   }
-  return <div className="runtime-setup"><div className="runtime-setup-card"><div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div><div className="eyebrow">ONE-TIME SETUP</div><h1>Prepare this computer</h1><p>HAR will download the compute runtime matched to this computer. The desktop app stays small, and the runtime is reused after setup.</p><div className="setup-detail"><span>Detected target</span><strong>{status.target || 'This computer'}</strong></div><div className="setup-detail"><span>Download</span><strong>{status.asset || 'Hardware-matched runtime'}</strong></div>{error && <div className="form-error">{error}</div>}<button className="primary-button setup-button" onClick={install} disabled={installing}>{installing ? 'Downloading runtime...' : 'Download runtime'}<span>-&gt;</span></button><small className="setup-footnote">Download size depends on the detected hardware.</small></div></div>
+  const percent = progress?.total ? Math.min(100, (progress.downloaded / progress.total) * 100) : null
+  const progressLabel = progress?.stage === 'extracting'
+    ? 'Unpacking runtime...'
+    : progress ? `${formatBytes(progress.downloaded)}${progress.total ? ` of ${formatBytes(progress.total)}` : ''}` : 'Contacting GitHub...'
+  return <div className="runtime-setup"><div className="runtime-setup-card"><div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div><div className="eyebrow">ONE-TIME SETUP</div><h1>Prepare this computer</h1><p>HAR will download the compute runtime matched to this computer. The desktop app stays small, and the runtime is reused after setup.</p><div className="setup-detail"><span>Detected target</span><strong>{status.target || 'This computer'}</strong></div><div className="setup-detail"><span>Download</span><strong>{progress?.asset || status.asset || 'Hardware-matched runtime'}</strong></div>{installing && <div className="setup-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent == null ? undefined : Math.round(percent)}><div className="setup-progress-track"><div className={`setup-progress-fill ${percent == null ? 'indeterminate' : ''}`} style={percent == null ? undefined : { width: `${percent}%` }} /></div><div className="setup-progress-meta"><span>{progressLabel}</span>{percent != null && progress?.stage !== 'extracting' && <strong>{percent.toFixed(0)}%</strong>}</div></div>}{error && <div className="form-error">{error}</div>}<button className="primary-button setup-button" onClick={install} disabled={installing}>{installing ? 'Installing runtime...' : error ? 'Try again' : 'Download runtime'}<span>-&gt;</span></button><small className="setup-footnote">{status.target === 'windows-x64-cuda' ? 'The NVIDIA CUDA runtime is a large download (about 2.5 GB). HAR falls back to the CPU runtime if it is unavailable.' : 'Download size depends on the detected hardware.'}</small></div></div>
 }
 
 function PageHeader({ eyebrow, title, description, action }) { return <div className="page-header"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div> }
@@ -192,7 +255,38 @@ function DeviceSummary({ device }) { const memory = device.memory; return <div c
 
 function WorkloadsView({ runs, scripts, onLaunch, onScriptLaunch, onNavigate, onSelectRun }) { return <><PageHeader eyebrow="TASKS" title="Tasks" description="Start a built-in calculation or run your own Python file." action={<div className="header-actions"><button className="secondary-button" onClick={onScriptLaunch}>Run Python file</button><button className="primary-button" onClick={onLaunch}><span>+</span> Start a task</button></div>} /><div className="workloads-layout"><section className="panel launch-card"><div className="eyebrow">GET STARTED</div><h2>Start a task</h2><p>Use a built-in calculation or send an approved Python file to a connected device.</p><button className="large-launch" onClick={onScriptLaunch}><span className="launch-icon">-&gt;</span><span><strong>Run a Python file</strong><small>Choose a file, device, and optional arguments</small></span><span className="arrow">+</span></button><div className="policy-note"><span className="status-dot" /><span>Files run in a temporary managed job folder.</span></div></section><section className="panel policy-card"><div className="eyebrow">BUILT-IN TASK</div><h2>Matrix calculation</h2><div className="policy-option selected"><span className="radio-dot" /><div><strong>Calculate and compare</strong><span>Run a verified calculation on an available device.</span></div><em>READY</em></div><div className="policy-note"><span className="status-dot preview" /><span>Python files run with the device's installed Python environment.</span></div></section></div><section className="section-block"><div className="section-heading"><div><div className="eyebrow">TASK HISTORY</div><h2>All tasks</h2></div><button className="text-button" onClick={() => onNavigate('traces')}>See activity <span>-&gt;</span></button></div>{runs.length || scripts.length ? <div className="workload-list">{runs.map((run) => <WorkloadRow key={run.id} run={run} onClick={() => { onSelectRun(run.id); onNavigate('traces') }} detailed />)}{scripts.map((script) => <ScriptRow key={script.id} script={script} />)}</div> : <EmptyState title="No tasks yet" detail="Your completed and in-progress tasks will appear here." action="Start a task" onAction={onLaunch} />}</section></> }
 
-function FabricView({ devices, nodes, onConnect }) { const local = devices.filter((device) => device.available).map((device) => ({ ...device, kind: 'ON THIS COMPUTER', state: 'online', name: friendlyBackend(device.backend), detail: 'Ready to use' })); const remote = nodes.filter((node) => node.name !== 'This device').flatMap((node) => node.capabilities.filter((device) => device.available !== false).map((device) => ({ ...device, kind: `OTHER COMPUTER / ${node.name}`, state: node.status, name: friendlyBackend(device.backend), detail: node.status === 'online' ? 'Ready to use' : 'Not responding', node_id: node.node_id, memory: device.memory || {} }))); const all = [...local, ...remote]; return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button>} /><div className="fabric-banner"><div><span className="status-dot" /><strong>{all.filter((device) => device.state === 'online').length} devices ready</strong><span>{all.length} available devices</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</> }
+const roleOptions = [
+  { id: 'host', label: 'Host', detail: 'Send tasks to this computer and to devices you add.' },
+  { id: 'worker', label: 'Worker', detail: 'Let another computer running HAR send tasks here.' },
+  { id: 'standalone', label: 'Standalone', detail: 'Use only this computer. Not reachable from the network.' },
+]
+
+function RolePanel() {
+  const [role, setRole] = useState(null)
+  const [hostUrl, setHostUrl] = useState('')
+  const [switching, setSwitching] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (!window.__TAURI_INTERNALS__) return
+    invoke('runtime_role').then(setRole).catch(() => {})
+  }, [])
+  useEffect(() => {
+    if (!role) return
+    fetch(`${API}/api/session`).then((response) => response.ok ? response.json() : {}).then((data) => setHostUrl(data.host_url || '')).catch(() => {})
+  }, [role])
+  if (!window.__TAURI_INTERNALS__ || !role) return null
+  const change = async (next) => {
+    if (next === role) return
+    setSwitching(true); setError('')
+    try { setRole(await invoke('set_runtime_role', { role: next })) } catch (roleError) { setError(roleError.toString()) } finally { setSwitching(false) }
+  }
+  // The worker service listens on port 9000 on the same LAN address the host API advertises.
+  const workerAddress = hostUrl ? hostUrl.replace(/:\d+$/, ':9000') : ''
+  const lanAddress = hostUrl ? hostUrl.replace(/^https?:\/\//, '').replace(/:\d+$/, '') : ''
+  return <section className="role-panel panel"><div className="role-panel-head"><div><span className="eyebrow">THIS COMPUTER'S ROLE</span><p>{roleOptions.find((option) => option.id === role)?.detail}</p>{lanAddress && <p className="role-ip">This PC's address: <code>{lanAddress}</code> <button className="link-button" onClick={() => navigator.clipboard?.writeText(lanAddress)}>Copy</button></p>}</div><div className="role-options" role="radiogroup" aria-label="Runtime role">{roleOptions.map((option) => <button key={option.id} role="radio" aria-checked={role === option.id} className={`role-option ${role === option.id ? 'active' : ''}`} onClick={() => change(option.id)} disabled={switching}>{option.label}</button>)}</div></div>{role === 'worker' && <div className="role-address"><span>On the other computer, choose <strong>Add device</strong> and enter</span><code>{workerAddress || 'http://<this-computer-IP>:9000'}</code>{workerAddress && <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(workerAddress)}>Copy</button>}</div>}{error && <div className="form-error">{error}</div>}</section>
+}
+
+function FabricView({ devices, nodes, onConnect }) { const local = devices.filter((device) => device.available).map((device) => ({ ...device, kind: 'ON THIS COMPUTER', state: 'online', name: friendlyBackend(device.backend), detail: 'Ready to use' })); const remote = nodes.filter((node) => node.name !== 'This device').flatMap((node) => node.capabilities.filter((device) => device.available !== false).map((device) => ({ ...device, kind: `OTHER COMPUTER / ${node.name}`, state: node.status, name: friendlyBackend(device.backend), detail: node.status === 'online' ? 'Ready to use' : 'Not responding', node_id: node.node_id, memory: device.memory || {} }))); const all = [...local, ...remote]; return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button>} /><RolePanel /><div className="fabric-banner"><div><span className="status-dot" /><strong>{all.filter((device) => device.state === 'online').length} devices ready</strong><span>{all.length} available devices</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</> }
 
 function TracesView({ run, trace, runs, onSelectRun }) { return <><PageHeader eyebrow="TASK DETAILS" title="Activity" description="See the steps HAR completed for a task." action={<select className="trace-select" value={run?.id || ''} onChange={(event) => onSelectRun(event.target.value)}><option value="">Choose a task</option>{runs.map((item) => <option key={item.id} value={item.id}>{item.id} / {friendlyBackend(item.request.backend)}</option>)}</select>} />{!run ? <EmptyState title="No task selected" detail="Start a task first, then choose it here." /> : <><div className="trace-toolbar"><div><span className="eyebrow">TASK</span><strong>{run.id} / Matrix calculation / {friendlyBackend(run.request.backend)}</strong></div><span className="trace-context"><StatusBadge status={run.status} /></span></div><section className="panel trace-panel">{trace?.operations?.length ? trace.operations.map((operation) => <TraceRow key={operation.name} operation={operation} />) : <div className="empty-state">Activity will appear when the task finishes.</div>}</section><div className="trace-footer"><div><span className="eyebrow">RESULT</span><strong>{run.result ? (run.result.correctness_passed ? 'Everything looks good' : 'Please check the result') : 'Still working'}</strong><span>{run.request.size} x {run.request.size} calculation / {run.request.measured_iterations} checks</span></div><div className="selected-metrics"><Metric label="Time" value={formatDuration(run.result?.latency_seconds?.median)} /><Metric label="Speed" value={run.result?.throughput_tflops?.median != null ? `${run.result.throughput_tflops.median.toFixed(3)} TFLOP/s` : 'Unavailable'} /><Metric label="Memory" value={run.result ? (run.result.device.memory.estimated ? 'Estimated' : 'Measured') : 'Pending'} /></div></div></>}</> }
 
@@ -219,19 +313,22 @@ function ScriptLauncher({ nodes, onClose, onSubmit }) {
 }
 
 function ConnectDevice({ onClose, onConnected }) {
-  const [workerUrl, setWorkerUrl] = useState('http://')
+  const [workerUrl, setWorkerUrl] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
+  const [waiting, setWaiting] = useState(false)
   const submit = async (event) => {
     event.preventDefault(); setError('')
+    if (!workerUrl.trim()) { setError("Enter the address shown on the other computer's Devices page."); return }
+    setWaiting(true)
     try {
       const response = await fetch(`${API}/api/nodes/connect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_url: workerUrl.trim(), name: name.trim() || null }) })
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || 'Could not connect this device')
       await onConnected()
-    } catch (connectError) { setError(connectError.message) }
+    } catch (connectError) { setError(connectError.message) } finally { setWaiting(false) }
   }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">ADD DEVICE</div><h2>Connect another computer</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>Open the HAR worker app on the other computer, then enter the address shown there.</p><label>Device address<input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="http://192.168.1.25:9000" /></label><label>Device name <span className="optional">OPTIONAL</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></label><div className="advanced-note">The other computer must be running HAR Worker and be on the same trusted network.</div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">Connect device <span>-&gt;</span></button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">ADD DEVICE</div><h2>Connect another computer</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>Open the HAR worker app on the other computer, then enter the address shown there.</p><label>Device address<input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="192.168.1.25:9000" disabled={waiting} autoFocus /></label><label>Device name <span className="optional">OPTIONAL</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></label><div className="advanced-note">{waiting ? 'Waiting for someone to click Accept on the other computer (up to 2 minutes)...' : 'Set the other computer to Worker on its Devices page. After you connect, click Accept there.'}</div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={waiting}>{waiting ? 'Waiting for approval...' : 'Connect device'} <span>-&gt;</span></button></div></form></div>
 }
 
 function Launcher({ devices, nodes, onClose, onSubmit }) { const available = devices.filter((device) => device.available); const [form, setForm] = useState({ backend: available[0]?.backend || 'cpu', size: 1024, warmup_iterations: 3, measured_iterations: 10, seed: 42, target_node: 'local' }); const [submitError, setSubmitError] = useState(''); const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value })); const submit = async (event) => { event.preventDefault(); setSubmitError(''); try { await onSubmit({ ...form, size: Number(form.size), warmup_iterations: Number(form.warmup_iterations), measured_iterations: Number(form.measured_iterations), seed: Number(form.seed) }) } catch (error) { setSubmitError(error.message) } }; return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">NEW TASK</div><h2>Start a calculation</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>Choose how much work to do and which device should handle it.</p><label>Computer<select value={form.target_node} onChange={update('target_node')}><option value="local">This computer</option>{nodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} / {node.status === 'online' ? 'ready' : 'not available'}</option>)}</select></label><label>Processing device<select value={form.backend} onChange={update('backend')}>{available.map((device) => <option key={device.backend} value={device.backend}>{friendlyBackend(device.backend)}</option>)}</select></label><label>Amount of work<select value={form.size} onChange={update('size')}><option value="512">Small</option><option value="1024">Medium</option><option value="2048">Large</option></select></label><div className="advanced-note">HAR will choose the safe measurement settings automatically.</div>{submitError && <div className="form-error">{submitError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">Start task <span>-&gt;</span></button></div></form></div> }

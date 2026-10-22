@@ -26,6 +26,9 @@ class DiscoveryBeacon:
         self._thread = threading.Thread(target=self._run, daemon=True, name="har-discovery-beacon")
         self._thread.start()
 
+    def stop(self) -> None:
+        self._stop.set()
+
     def _run(self) -> None:
         message = json.dumps(self.payload).encode("utf-8")
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:

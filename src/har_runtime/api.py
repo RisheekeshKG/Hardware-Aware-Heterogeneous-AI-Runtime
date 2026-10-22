@@ -152,9 +152,16 @@ class RunRecord:
 
 
 app = FastAPI(title="Hardware-Aware AI Runtime API", version="0.2.0")
+# Only the desktop app (Vite dev server or the Tauri webview on macOS/Windows)
+# may call this API from a browser context. A wildcard would let any website
+# open in a browser start Python files on this computer.
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "tauri://localhost,http://tauri.localhost,https://tauri.localhost"
+)
 _cors_origins = [
     origin.strip()
-    for origin in os.getenv("HAR_CORS_ORIGINS", "*").split(",")
+    for origin in os.getenv("HAR_CORS_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
     if origin.strip()
 ]
 app.add_middleware(
@@ -164,6 +171,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+LOOPBACK_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+# Other computers only need to register and report heartbeats; everything else
+# (running code, connecting devices, reading results) stays local to this computer.
+REMOTE_ALLOWED_PATHS = {"/api/health", "/api/nodes/register", "/api/nodes/heartbeat"}
+
+
+@app.middleware("http")
+async def restrict_remote_clients(request, call_next):
+    client = request.client.host if request.client else ""
+    if client not in LOOPBACK_CLIENTS and request.url.path not in REMOTE_ALLOWED_PATHS:
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=403, content={"detail": "Only available on this computer"})
+    return await call_next(request)
 
 _runs: dict[str, RunRecord] = {}
 _nodes: dict[str, dict[str, Any]] = {}
@@ -233,7 +255,20 @@ def _run_script_in_process(record: ScriptRecord) -> None:
         record.status = "failed"
     finally:
         record.updated_at = datetime.now(timezone.utc).isoformat()
-_discovery = DiscoveryRegistry()
+_discovery: DiscoveryRegistry | None = None
+_discovery_lock = threading.Lock()
+
+
+def _discovery_registry() -> DiscoveryRegistry:
+    """Start the LAN listener on first use, so only the API process binds its UDP port."""
+
+    global _discovery
+    with _discovery_lock:
+        if _discovery is None:
+            _discovery = DiscoveryRegistry()
+        return _discovery
+
+
 _session = {
     "session_id": uuid.uuid4().hex[:10],
     "role": os.getenv("HAR_RUNTIME_ROLE", "host"),
@@ -245,6 +280,14 @@ _session = {
 @app.get("/api/runtime/role")
 def runtime_role() -> dict[str, str]:
     return {"role": _session["role"]}
+
+
+def configure_role(role: str) -> None:
+    _session["role"] = role
+
+
+def start_discovery() -> None:
+    _discovery_registry()
 
 
 def configure_host_url(url: str | None) -> None:
@@ -420,20 +463,75 @@ def session() -> dict[str, Any]:
     return {**_session, "connected_workers": len(_nodes)}
 
 
-@app.post("/api/nodes/connect")
-def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
-    """Ask a standalone worker to join this host, then return its registration."""
+CONNECT_APPROVAL_TIMEOUT_SECONDS = 120.0
+DEFAULT_WORKER_PORT = 9000
+
+
+def _normalize_worker_url(raw: str) -> str:
+    """Accept "192.168.1.25", "192.168.1.25:9000" or a full URL."""
+
+    value = raw.strip().rstrip("/")
+    if "://" not in value:
+        value = f"http://{value}"
+    parsed = urlsplit(value)
+    if not parsed.hostname:
+        raise HTTPException(status_code=422, detail="Enter the other computer's address, e.g. 192.168.1.25")
+    netloc = parsed.netloc if parsed.port else f"{parsed.netloc}:{DEFAULT_WORKER_PORT}"
+    return urlunsplit((parsed.scheme, netloc, "", "", ""))
+
+
+def _local_worker_url() -> str:
+    return os.getenv("HAR_LOCAL_WORKER_URL", f"http://127.0.0.1:{DEFAULT_WORKER_PORT}")
+
+
+@app.get("/api/pairing")
+def pairing_requests() -> list[dict[str, Any]]:
+    """Pending connection requests on this computer's worker (empty when not a worker)."""
 
     import httpx
 
-    worker_url = request.worker_url.rstrip("/")
+    if _session["role"] != "worker":
+        return []
+    try:
+        response = httpx.get(f"{_local_worker_url()}/worker/pairing", timeout=2.0)
+        response.raise_for_status()
+        return response.json()
+    except (httpx.HTTPError, ValueError):
+        return []
+
+
+@app.post("/api/pairing/{request_id}/{decision}")
+def decide_pairing(request_id: str, decision: Literal["accept", "decline"]) -> dict[str, Any]:
+    import httpx
+
+    try:
+        response = httpx.post(f"{_local_worker_url()}/worker/pairing/{request_id}/{decision}", timeout=5.0)
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"Worker service is not running: {error}") from error
+    if response.status_code >= 400:
+        raise HTTPException(status_code=response.status_code, detail=response.json().get("detail", response.text))
+    return response.json()
+
+
+@app.post("/api/nodes/connect")
+def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
+    """Ask a worker to join this host and wait until it is accepted there.
+
+    The worker answers 202 while the person at that computer has not yet
+    accepted the request, 200 once accepted, and 403 if they declined.
+    """
+
+    import httpx
+
+    worker_url = _normalize_worker_url(request.worker_url)
     coordinator_url = _session.get("host_url") or os.getenv("HAR_HOST_URL")
     if not coordinator_url:
         raise HTTPException(status_code=400, detail="Host URL is not configured; start har serve with --advertise-url")
     try:
-        deadline = time.monotonic() + 60.0
+        deadline = time.monotonic() + CONNECT_APPROVAL_TIMEOUT_SECONDS
         last_error: httpx.RequestError | None = None
-        with httpx.Client(timeout=httpx.Timeout(5.0, connect=2.0)) as client:
+        waiting_for_approval = False
+        with httpx.Client(timeout=httpx.Timeout(5.0, connect=3.0)) as client:
             while time.monotonic() < deadline:
                 try:
                     response = client.post(
@@ -444,17 +542,32 @@ def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
                             "node_id": request.node_id,
                         },
                     )
+                    if response.status_code == 202:
+                        waiting_for_approval = True
+                        time.sleep(1.0)
+                        continue
                     response.raise_for_status()
                     return response.json()
                 except httpx.RequestError as error:
                     last_error = error
-                    time.sleep(0.5)
+                    time.sleep(1.0)
+        if waiting_for_approval:
+            raise HTTPException(
+                status_code=504,
+                detail="Nobody accepted the request on that computer. Click Accept in HAR there, then try again.",
+            )
         raise HTTPException(
             status_code=504,
-            detail=f"Worker did not become ready within 60 seconds: {last_error}",
+            detail=(
+                f"Could not reach {worker_url}. Check that HAR on that computer is set to Worker, "
+                f"both computers are on the same network, and the firewall allows port 9000. ({last_error})"
+            ),
         )
     except httpx.HTTPStatusError as error:
-        detail = error.response.text or str(error)
+        try:
+            detail = error.response.json().get("detail") or error.response.text
+        except ValueError:
+            detail = error.response.text or str(error)
         raise HTTPException(status_code=400, detail=f"Worker rejected connection: {detail}") from error
     except httpx.HTTPError as error:
         raise HTTPException(status_code=502, detail=f"Worker is unreachable: {error}") from error
@@ -462,12 +575,12 @@ def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
 
 @app.get("/api/discovery")
 def discovery() -> list[dict[str, Any]]:
-    return _discovery.list_nodes()
+    return _discovery_registry().list_nodes()
 
 
 @app.post("/api/discovery/connect")
 def connect_discovered_node(request: DiscoveryConnectRequest) -> dict[str, Any]:
-    node = _discovery.get(request.node_id)
+    node = _discovery_registry().get(request.node_id)
     if not node:
         raise HTTPException(status_code=404, detail="Discovered node is no longer visible")
     connect_node(
@@ -620,6 +733,10 @@ def start_run(request: MatmulRunRequest) -> dict[str, Any]:
 
 @app.websocket("/api/runs/{run_id}/events")
 async def run_events(websocket: WebSocket, run_id: str) -> None:
+    # HTTP middleware does not cover websockets; apply the same local-only rule.
+    if (websocket.client.host if websocket.client else "") not in LOOPBACK_CLIENTS:
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     record = _runs.get(run_id)
     if not record:

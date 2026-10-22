@@ -18,8 +18,11 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+import json
+
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .api import MatmulRunRequest, ScriptRunRequest
@@ -84,9 +87,60 @@ worker_app = FastAPI(title="Hardware-Aware AI Runtime Worker", version="0.2.0")
 _worker_runs: dict[str, WorkerRun] = {}
 _worker_script_runs: dict[str, WorkerScriptRun] = {}
 _worker_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="har-worker")
-_worker_config: dict[str, str] = {}
-_node_id_path = Path.home() / ".har-runtime" / "node-id"
+_worker_config: dict[str, Any] = {}
+_state_dir = Path.home() / ".har-runtime"
+_node_id_path = _state_dir / "node-id"
+_trusted_hosts_path = _state_dir / "trusted-hosts.json"
 _discovery_beacon: DiscoveryBeacon | None = None
+# Bumped on every (re)configuration so a previous registration loop stops.
+_registration_generation = 0
+_config_lock = threading.Lock()
+
+LOOPBACK_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
+PAIRING_REQUEST_TTL_SECONDS = 120.0
+# Hosts approved on this machine, by IP. Only they (and this machine) may run work here.
+_trusted_hosts: set[str] = set()
+_pairing_requests: dict[str, dict[str, Any]] = {}
+_pairing_lock = threading.Lock()
+
+
+def _load_trusted_hosts() -> None:
+    try:
+        stored = json.loads(_trusted_hosts_path.read_text(encoding="utf-8"))
+        _trusted_hosts.update(str(host) for host in stored if host)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def _save_trusted_hosts() -> None:
+    try:
+        _state_dir.mkdir(parents=True, exist_ok=True)
+        _trusted_hosts_path.write_text(json.dumps(sorted(_trusted_hosts)), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_load_trusted_hosts()
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else ""
+
+
+def _is_loopback_client(request: Request) -> bool:
+    return _client_ip(request) in LOOPBACK_CLIENTS
+
+
+def _require_trusted(request: Request) -> None:
+    client = _client_ip(request)
+    if client in LOOPBACK_CLIENTS or client in _trusted_hosts:
+        return
+    raise HTTPException(status_code=403, detail="This computer has not accepted a connection from you")
+
+
+def _require_loopback(request: Request) -> None:
+    if not _is_loopback_client(request):
+        raise HTTPException(status_code=403, detail="Only available on this computer")
 
 
 def _lan_address() -> str:
@@ -194,21 +248,86 @@ def capabilities() -> list[dict[str, Any]]:
     return [device.to_dict() for device in discover_devices()]
 
 
-@worker_app.post("/worker/join")
-def join_host(request: WorkerJoinRequest) -> dict[str, Any]:
+@worker_app.post("/worker/join", response_model=None)
+def join_host(request: WorkerJoinRequest, http_request: Request) -> dict[str, Any] | JSONResponse:
+    """Join a host once the person at this computer has accepted it.
+
+    Unknown hosts get a 202 "pending" answer and a pairing request that the
+    desktop app shows as an Accept/Decline prompt. The host keeps calling this
+    endpoint until the request is accepted (200) or declined (403).
+    """
+
     if not _worker_config.get("allow_connections", True):
         raise HTTPException(status_code=403, detail="Worker is not accepting host connections")
+    client = _client_ip(http_request)
+    if client not in LOOPBACK_CLIENTS and client not in _trusted_hosts:
+        pending = _pairing_request_for(client, request)
+        if pending["status"] == "declined":
+            raise HTTPException(status_code=403, detail="The connection was declined on that computer")
+        if pending["status"] != "accepted":
+            return JSONResponse(status_code=202, content={"status": "pending", "request_id": pending["id"]})
     configure_worker(
         coordinator=request.coordinator,
         base_url=_worker_config["advertise_url"],
-        name=request.name,
+        name=request.name or _default_name(),
         node_id=request.node_id or stable_node_id(),
     )
     return {"status": "joining", "node_id": _worker_config["node_id"], "coordinator": request.coordinator}
 
 
+def _pairing_request_for(client: str, request: WorkerJoinRequest) -> dict[str, Any]:
+    now = time.monotonic()
+    with _pairing_lock:
+        for record_id, record in list(_pairing_requests.items()):
+            if now - record["last_seen"] > PAIRING_REQUEST_TTL_SECONDS:
+                del _pairing_requests[record_id]
+        for record in _pairing_requests.values():
+            if record["client_ip"] == client:
+                record["last_seen"] = now
+                record["coordinator"] = request.coordinator
+                return record
+        record = {
+            "id": uuid.uuid4().hex[:12],
+            "client_ip": client,
+            "coordinator": request.coordinator,
+            "status": "pending",
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+            "last_seen": now,
+        }
+        _pairing_requests[record["id"]] = record
+        return record
+
+
+@worker_app.get("/worker/pairing")
+def pairing_requests(http_request: Request) -> list[dict[str, Any]]:
+    _require_loopback(http_request)
+    with _pairing_lock:
+        return [
+            {key: value for key, value in record.items() if key != "last_seen"}
+            for record in _pairing_requests.values()
+            if record["status"] == "pending"
+        ]
+
+
+@worker_app.post("/worker/pairing/{request_id}/{decision}")
+def decide_pairing(request_id: str, decision: str, http_request: Request) -> dict[str, Any]:
+    _require_loopback(http_request)
+    if decision not in {"accept", "decline"}:
+        raise HTTPException(status_code=422, detail="Decision must be accept or decline")
+    with _pairing_lock:
+        record = _pairing_requests.get(request_id)
+        if not record:
+            raise HTTPException(status_code=404, detail="Connection request has expired")
+        record["status"] = "accepted" if decision == "accept" else "declined"
+    if decision == "accept":
+        _trusted_hosts.add(record["client_ip"])
+        _save_trusted_hosts()
+    return {"id": request_id, "status": record["status"]}
+
+
 @worker_app.post("/worker/runs", status_code=202)
-def start_worker_run(request: MatmulRunRequest) -> dict[str, Any]:
+def start_worker_run(request: MatmulRunRequest, http_request: Request) -> dict[str, Any]:
+    _require_trusted(http_request)
     try:
         get_device_info(request.backend)
     except (ValueError, RuntimeError) as error:
@@ -220,7 +339,8 @@ def start_worker_run(request: MatmulRunRequest) -> dict[str, Any]:
 
 
 @worker_app.post("/worker/scripts", status_code=202)
-def start_worker_script(request: ScriptRunRequest) -> dict[str, Any]:
+def start_worker_script(request: ScriptRunRequest, http_request: Request) -> dict[str, Any]:
+    _require_trusted(http_request)
     if Path(request.filename).name != request.filename or Path(request.filename).suffix.lower() != ".py":
         raise HTTPException(status_code=422, detail="Only a single .py file can be run")
     record = WorkerScriptRun(request)
@@ -230,7 +350,8 @@ def start_worker_script(request: ScriptRunRequest) -> dict[str, Any]:
 
 
 @worker_app.get("/worker/scripts/{run_id}")
-def worker_script_status(run_id: str) -> dict[str, Any]:
+def worker_script_status(run_id: str, http_request: Request) -> dict[str, Any]:
+    _require_trusted(http_request)
     record = _worker_script_runs.get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Worker script run not found")
@@ -238,14 +359,15 @@ def worker_script_status(run_id: str) -> dict[str, Any]:
 
 
 @worker_app.get("/worker/runs/{run_id}")
-def worker_run_status(run_id: str) -> dict[str, Any]:
+def worker_run_status(run_id: str, http_request: Request) -> dict[str, Any]:
+    _require_trusted(http_request)
     record = _worker_runs.get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Worker run not found")
     return record.to_dict()
 
 
-def _registration_loop() -> None:
+def _registration_loop(generation: int) -> None:
     coordinator = _worker_config["coordinator"].rstrip("/")
     registration = {
         "node_id": _worker_config["node_id"],
@@ -260,14 +382,42 @@ def _registration_loop() -> None:
         # Registration must remain available even if hardware probing is slow
         # or a platform backend raises during startup.
         pass
-    while True:
-        try:
-            with httpx.Client(timeout=10.0) as client:
+    with httpx.Client(timeout=10.0) as client:
+        while generation == _registration_generation:
+            try:
                 client.post(f"{coordinator}/api/nodes/register", json=registration).raise_for_status()
                 client.post(f"{coordinator}/api/nodes/heartbeat", json={"node_id": registration["node_id"], "active_job": None})
-        except httpx.HTTPError:
-            pass
-        time.sleep(5)
+            except httpx.HTTPError:
+                pass
+            time.sleep(5)
+
+
+def _default_name() -> str:
+    return socket.gethostname()
+
+
+_last_host_path = _state_dir / "last-host.json"
+
+
+def _remember_host(coordinator: str, name: str) -> None:
+    try:
+        _state_dir.mkdir(parents=True, exist_ok=True)
+        _last_host_path.write_text(json.dumps({"coordinator": coordinator, "name": name}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _remembered_host() -> dict[str, str] | None:
+    """Return the last accepted host, so a restarted worker rejoins it without a new prompt."""
+
+    try:
+        stored = json.loads(_last_host_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    coordinator = str(stored.get("coordinator") or "")
+    if urlsplit(coordinator).hostname not in _trusted_hosts:
+        return None
+    return {"coordinator": coordinator, "name": str(stored.get("name") or "")}
 
 
 def configure_worker(
@@ -278,32 +428,44 @@ def configure_worker(
     node_id: str | None = None,
     allow_connections: bool = True,
 ) -> None:
-    global _discovery_beacon
+    global _discovery_beacon, _registration_generation
+    if not coordinator:
+        remembered = _remembered_host()
+        if remembered:
+            coordinator = remembered["coordinator"]
+            name = name or remembered["name"] or None
+    elif not _is_local_url(coordinator):
+        _remember_host(coordinator, name or "")
     resolved_node_id = node_id or stable_node_id()
-    resolved_name = name or socket.gethostname()
+    resolved_name = name or _default_name()
     resolved_advertise_url = _reachable_base_url(base_url)
     coordinator_is_local = bool(coordinator and _is_local_url(coordinator))
     resolved_base_url = base_url.rstrip("/") if coordinator_is_local and _is_local_url(base_url) else resolved_advertise_url
-    _worker_config.update(
-        {
-            "coordinator": coordinator or "",
-            "base_url": resolved_base_url,
-            "advertise_url": resolved_advertise_url,
-            "name": resolved_name,
-            "node_id": resolved_node_id,
-            "allow_connections": allow_connections,
-        }
-    )
-    _discovery_beacon = DiscoveryBeacon(
-        {
-            "role": "worker",
-            "node_id": resolved_node_id,
-            "name": resolved_name,
-            "base_url": resolved_advertise_url,
-            "host": system_info(),
-            "capabilities": [],
-        }
-    )
-    _discovery_beacon.start()
+    with _config_lock:
+        _worker_config.update(
+            {
+                "coordinator": coordinator or "",
+                "base_url": resolved_base_url,
+                "advertise_url": resolved_advertise_url,
+                "name": resolved_name,
+                "node_id": resolved_node_id,
+                "allow_connections": allow_connections,
+            }
+        )
+        _registration_generation += 1
+        generation = _registration_generation
+        if _discovery_beacon:
+            _discovery_beacon.stop()
+        _discovery_beacon = DiscoveryBeacon(
+            {
+                "role": "worker",
+                "node_id": resolved_node_id,
+                "name": resolved_name,
+                "base_url": resolved_advertise_url,
+                "host": system_info(),
+                "capabilities": [],
+            }
+        )
+        _discovery_beacon.start()
     if coordinator:
-        threading.Thread(target=_registration_loop, daemon=True, name="har-registration").start()
+        threading.Thread(target=_registration_loop, args=(generation,), daemon=True, name="har-registration").start()
