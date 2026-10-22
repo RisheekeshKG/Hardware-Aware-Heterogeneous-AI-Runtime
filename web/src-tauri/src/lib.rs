@@ -759,6 +759,102 @@ fn runtime_role(app: AppHandle) -> String {
     stored_role(&app)
 }
 
+#[derive(Serialize)]
+struct CpuInfo {
+    brand: Option<String>,
+    frequency_ghz: Option<f64>,
+}
+
+#[tauri::command]
+fn cpu_info() -> CpuInfo {
+    use std::process::Command;
+    let mut brand: Option<String> = None;
+    let mut frequency_ghz: Option<f64> = None;
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(output) = Command::new("/usr/sbin/sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+        {
+            let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !value.is_empty() {
+                brand = Some(value);
+            }
+        }
+        if let Ok(output) = Command::new("/usr/sbin/sysctl")
+            .args(["-n", "hw.cpufrequency_max"])
+            .output()
+        {
+            if let Ok(hz) = String::from_utf8_lossy(&output.stdout).trim().parse::<u64>() {
+                if hz > 0 {
+                    frequency_ghz = Some((hz as f64) / 1_000_000_000.0);
+                }
+            }
+        }
+        if frequency_ghz.is_none() {
+            if let Ok(output) = Command::new("/usr/sbin/sysctl")
+                .args(["-n", "hw.tbfrequency"])
+                .output()
+            {
+                let _ = String::from_utf8_lossy(&output.stdout);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(content) = std::fs::read_to_string("/proc/cpuinfo") {
+            for line in content.lines() {
+                let lower = line.to_lowercase();
+                if brand.is_none() && lower.starts_with("model name") {
+                    if let Some((_, value)) = line.split_once(':') {
+                        let value = value.trim();
+                        if !value.is_empty() {
+                            brand = Some(value.to_string());
+                        }
+                    }
+                }
+                if frequency_ghz.is_none() && lower.starts_with("cpu mhz") {
+                    if let Some((_, value)) = line.split_once(':') {
+                        if let Ok(mhz) = value.trim().parse::<f64>() {
+                            frequency_ghz = Some(mhz / 1000.0);
+                        }
+                    }
+                }
+                if brand.is_some() && frequency_ghz.is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = Command::new("wmic")
+            .args(["cpu", "get", "Name,MaxClockSpeed", "/format:value"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&output.stdout);
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(value) = line.strip_prefix("Name=") {
+                    if !value.is_empty() {
+                        brand = Some(value.to_string());
+                    }
+                } else if let Some(value) = line.strip_prefix("MaxClockSpeed=") {
+                    if let Ok(mhz) = value.parse::<f64>() {
+                        if mhz > 0.0 {
+                            frequency_ghz = Some(mhz / 1000.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(ghz) = frequency_ghz {
+        frequency_ghz = Some((ghz * 100.0).round() / 100.0);
+    }
+    CpuInfo { brand, frequency_ghz }
+}
+
 #[tauri::command]
 async fn set_runtime_role(app: AppHandle, role: String) -> Result<String, String> {
     if !matches!(role.as_str(), "host" | "worker" | "standalone") {
@@ -812,7 +908,8 @@ pub fn run() {
             runtime_role,
             runtime_status,
             install_runtime,
-            start_runtime
+            start_runtime,
+            cpu_info
         ])
         .build(tauri::generate_context!())
         .expect("error while building HAR Runtime");

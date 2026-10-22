@@ -66,3 +66,28 @@ button { cursor: pointer; }
 .pairing-modal p strong { color: #e8edf1; }
 .runtime-update { border-color: #4a5a2a; }
 .runtime-update .status-dot { background: var(--lime); }
+
+.nav-group-label.devtools { margin-top: 22px; color: #8a7a52; }
+.devtools-eyebrow { color: var(--amber); }
+.devtools-card { border-color: #4b3c2c; }
+.devtools-card h2 { color: #e5d7bd; }
+.workload-row.script-row { cursor: pointer; }
+.workload-row.script-row:hover { background: #171d23; }
+.workload-row.script-row.active { background: #1a241d; box-shadow: inset 2px 0 var(--lime); }
+.script-detail { padding: 22px 24px; margin-top: 18px; border-color: #526637; background: rgba(16, 21, 26, .92); }
+.script-detail h2 { font: 500 15px 'DM Mono'; letter-spacing: 0; overflow-wrap: anywhere; }
+.script-detail-actions { display: flex; align-items: center; gap: 9px; }
+.script-detail .placement-grid { margin: 20px 0 16px; }
+.script-args { display: flex; align-items: center; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.script-args code { padding: 7px 10px; border: 1px solid var(--border); color: var(--lime); background: var(--raised); font: 11px 'DM Mono'; overflow-wrap: anywhere; }
+.script-output-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 22px; color: var(--muted); font: 10px 'DM Mono'; }
+.script-output-head span:last-child { color: #5e6b76; font: 9px 'DM Mono'; }
+.script-output { max-height: 360px; margin: 10px 0 0; padding: 14px 16px; overflow: auto; border: 1px solid var(--border); color: #d6e4e9; background: #0a0d10; font: 11px/1.6 'DM Mono'; white-space: pre-wrap; word-break: break-word; }
+.hardware-block { margin-top: 10px; padding: 14px 16px; border: 1px solid var(--border); background: rgba(10, 13, 16, .6); }
+.hardware-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.hardware-list { display: grid; gap: 10px; }
+.hardware-row { display: flex; align-items: flex-start; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); background: var(--panel); }
+.hardware-row > div { display: grid; gap: 4px; min-width: 0; }
+.hardware-row strong { color: #dbe4e6; font: 12px/1.4 'DM Mono'; font-weight: 500; overflow-wrap: anywhere; }
+.hardware-row span { color: #6c7882; font: 10px 'DM Mono'; }
+.hardware-block .policy-note { margin-top: 12px; }

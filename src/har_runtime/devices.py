@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import platform
 import os
+import subprocess
 import sys
 from collections.abc import Callable
 
@@ -96,11 +97,42 @@ def _unavailable_memory(reason: str) -> MemoryMeasurement:
     return MemoryMeasurement(None, None, "unavailable", False, False, reason)
 
 
+def _cpu_brand() -> str:
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            result = subprocess.run(
+                ["/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                timeout=1,
+                check=False,
+            )
+            name = result.stdout.strip()
+            if name:
+                return name
+        elif system == "Linux":
+            with open("/proc/cpuinfo", "r", encoding="utf-8") as handle:
+                for line in handle:
+                    if line.lower().startswith("model name"):
+                        _, _, value = line.partition(":")
+                        name = value.strip()
+                        if name:
+                            return name
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return platform.processor() or platform.machine() or "CPU"
+
+
 def _cpu_info() -> DeviceInfo:
+    frequency = psutil.cpu_freq()
+    frequency_mhz = frequency.max or frequency.current if frequency else None
+    frequency_ghz = round(frequency_mhz / 1000, 2) if frequency_mhz else None
+    brand = _cpu_brand()
     return DeviceInfo(
         backend="cpu",
         available=True,
-        device_name=platform.processor() or platform.machine() or "CPU",
+        device_name=brand,
         torch_device="cpu",
         torch_version=torch.__version__,
         details={
@@ -108,6 +140,9 @@ def _cpu_info() -> DeviceInfo:
             "python_version": sys.version.split()[0],
             "logical_cpu_count": psutil.cpu_count(logical=True),
             "physical_cpu_count": psutil.cpu_count(logical=False),
+            "cpu_brand": brand,
+            "frequency_mhz": frequency_mhz,
+            "frequency_ghz": frequency_ghz,
         },
         memory=_system_memory(),
     )
