@@ -1,6 +1,7 @@
-use std::io::{Read, Write};
+use std::collections::VecDeque;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -143,7 +144,8 @@ struct ReleaseAsset {
 struct DownloadPlan {
     target: &'static str,
     asset: String,
-    urls: Vec<String>,
+    /// Each published file (one, or numbered parts) with its size when known.
+    parts: Vec<(String, Option<u64>)>,
     total: Option<u64>,
 }
 
@@ -228,7 +230,7 @@ fn plan_downloads(client: &reqwest::blocking::Client) -> Result<Vec<DownloadPlan
                 let asset = runtime_asset_name(target);
                 DownloadPlan {
                     target,
-                    urls: vec![release_download_url(&asset)],
+                    parts: vec![(release_download_url(&asset), None)],
                     asset,
                     total: None,
                 }
@@ -242,7 +244,7 @@ fn plan_downloads(client: &reqwest::blocking::Client) -> Result<Vec<DownloadPlan
             plans.push(DownloadPlan {
                 target,
                 asset,
-                urls: vec![found.browser_download_url.clone()],
+                parts: vec![(found.browser_download_url.clone(), Some(found.size))],
                 total: Some(found.size),
             });
             continue;
@@ -262,9 +264,9 @@ fn plan_downloads(client: &reqwest::blocking::Client) -> Result<Vec<DownloadPlan
             plans.push(DownloadPlan {
                 target,
                 asset,
-                urls: parts
+                parts: parts
                     .iter()
-                    .map(|part| part.browser_download_url.clone())
+                    .map(|part| (part.browser_download_url.clone(), Some(part.size)))
                     .collect(),
                 total: Some(parts.iter().map(|part| part.size).sum()),
             });
@@ -280,30 +282,195 @@ fn plan_downloads(client: &reqwest::blocking::Client) -> Result<Vec<DownloadPlan
     Ok(plans)
 }
 
+// GitHub's release CDN can be slow per connection (~100 KB/s on some
+// networks), so files of known size are fetched as byte ranges over several
+// connections at once and written in place.
+const DOWNLOAD_CONNECTIONS: usize = 8;
+const DOWNLOAD_CHUNK_BYTES: u64 = 8 * 1024 * 1024;
+const DOWNLOAD_CHUNK_ATTEMPTS: u32 = 5;
+const DOWNLOAD_CHUNK_TIMEOUT: Duration = Duration::from_secs(300);
+
 fn download(
     app: &AppHandle,
     client: &reqwest::blocking::Client,
     plan: &DownloadPlan,
     archive: &Path,
 ) -> Result<(), DownloadError> {
-    let failed = |error: String| DownloadError::Failed(error);
-    let mut file = std::fs::File::create(archive).map_err(|error| failed(error.to_string()))?;
-    let mut buffer = vec![0u8; 256 * 1024];
-    let mut downloaded = 0u64;
-    let mut last_report = Instant::now();
-    let report = |downloaded: u64| {
+    let downloaded = AtomicU64::new(0);
+    let report = || {
         let _ = app.emit(
             "runtime-install-progress",
             InstallProgress {
                 stage: "downloading",
                 asset: plan.asset.clone(),
-                downloaded,
+                downloaded: downloaded.load(Ordering::Relaxed),
                 total: plan.total,
             },
         );
     };
-    report(0);
-    for url in &plan.urls {
+    report();
+    let sizes: Option<Vec<u64>> = plan.parts.iter().map(|(_, size)| *size).collect();
+    let result = match sizes {
+        Some(sizes) => download_ranges(client, plan, &sizes, archive, &downloaded, &report),
+        None => download_stream(client, plan, archive, &downloaded, &report),
+    };
+    report();
+    result
+}
+
+fn download_ranges(
+    client: &reqwest::blocking::Client,
+    plan: &DownloadPlan,
+    sizes: &[u64],
+    archive: &Path,
+    downloaded: &AtomicU64,
+    report: &(dyn Fn() + Sync),
+) -> Result<(), DownloadError> {
+    let failed = |error: std::io::Error| DownloadError::Failed(error.to_string());
+    let total: u64 = sizes.iter().sum();
+    std::fs::File::create(archive)
+        .and_then(|file| file.set_len(total))
+        .map_err(failed)?;
+
+    // (url, offset in the joined archive, first byte, last byte)
+    let mut chunks = VecDeque::new();
+    let mut part_offset = 0u64;
+    for ((url, _), &size) in plan.parts.iter().zip(sizes) {
+        let mut start = 0u64;
+        while start < size {
+            let end = (start + DOWNLOAD_CHUNK_BYTES).min(size) - 1;
+            chunks.push_back((url.as_str(), part_offset + start, start, end));
+            start = end + 1;
+        }
+        part_offset += size;
+    }
+    let queue = Mutex::new(chunks);
+    let first_error: Mutex<Option<DownloadError>> = Mutex::new(None);
+
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..DOWNLOAD_CONNECTIONS)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut file = match std::fs::OpenOptions::new().write(true).open(archive) {
+                        Ok(file) => file,
+                        Err(error) => {
+                            first_error.lock().unwrap().get_or_insert(failed(error));
+                            return;
+                        }
+                    };
+                    let mut buffer = vec![0u8; 64 * 1024];
+                    loop {
+                        if first_error.lock().unwrap().is_some() {
+                            return;
+                        }
+                        let Some((url, offset, start, end)) = queue.lock().unwrap().pop_front()
+                        else {
+                            return;
+                        };
+                        if let Err(error) = fetch_range(
+                            client,
+                            url,
+                            (start, end),
+                            &mut file,
+                            offset,
+                            &mut buffer,
+                            downloaded,
+                        ) {
+                            first_error.lock().unwrap().get_or_insert(error);
+                            return;
+                        }
+                    }
+                })
+            })
+            .collect();
+        while !workers.iter().all(|worker| worker.is_finished()) {
+            report();
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    });
+
+    match first_error.into_inner().unwrap() {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// Downloads one byte range into `file` at `offset`, retrying a dropped or
+/// stalled connection a few times before giving up.
+fn fetch_range(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    (start, end): (u64, u64),
+    file: &mut std::fs::File,
+    offset: u64,
+    buffer: &mut [u8],
+    downloaded: &AtomicU64,
+) -> Result<(), DownloadError> {
+    let mut last_error = String::new();
+    for attempt in 1..=DOWNLOAD_CHUNK_ATTEMPTS {
+        let mut written = 0u64;
+        let result = (|| -> Result<(), DownloadError> {
+            let failed = |error: String| DownloadError::Failed(error);
+            let mut response = client
+                .get(url)
+                .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+                .timeout(DOWNLOAD_CHUNK_TIMEOUT)
+                .send()
+                .map_err(|error| failed(error.to_string()))?;
+            if response.status() == reqwest::StatusCode::NOT_FOUND {
+                return Err(DownloadError::NotFound);
+            }
+            if response.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return Err(failed(format!("server returned HTTP {}", response.status())));
+            }
+            file.seek(SeekFrom::Start(offset))
+                .map_err(|error| failed(error.to_string()))?;
+            loop {
+                let read = response
+                    .read(buffer)
+                    .map_err(|error| failed(error.to_string()))?;
+                if read == 0 {
+                    break;
+                }
+                file.write_all(&buffer[..read])
+                    .map_err(|error| failed(format!("could not save runtime download: {error}")))?;
+                written += read as u64;
+                downloaded.fetch_add(read as u64, Ordering::Relaxed);
+            }
+            if written != end - start + 1 {
+                return Err(failed("connection closed early".to_string()));
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => return Ok(()),
+            Err(DownloadError::NotFound) => return Err(DownloadError::NotFound),
+            Err(DownloadError::Failed(error)) => {
+                downloaded.fetch_sub(written, Ordering::Relaxed);
+                last_error = error;
+                std::thread::sleep(Duration::from_secs(u64::from(attempt)));
+            }
+        }
+    }
+    Err(DownloadError::Failed(format!(
+        "runtime download failed: {last_error}"
+    )))
+}
+
+/// Single-connection fallback for when asset sizes are unknown (the release
+/// API was unavailable).
+fn download_stream(
+    client: &reqwest::blocking::Client,
+    plan: &DownloadPlan,
+    archive: &Path,
+    downloaded: &AtomicU64,
+    report: &dyn Fn(),
+) -> Result<(), DownloadError> {
+    let failed = |error: String| DownloadError::Failed(error);
+    let mut file = std::fs::File::create(archive).map_err(|error| failed(error.to_string()))?;
+    let mut buffer = vec![0u8; 256 * 1024];
+    let mut last_report = Instant::now();
+    for (url, _) in &plan.parts {
         let mut response = client
             .get(url)
             .send()
@@ -326,16 +493,14 @@ fn download(
             }
             file.write_all(&buffer[..read])
                 .map_err(|error| failed(format!("could not save runtime download: {error}")))?;
-            downloaded += read as u64;
+            downloaded.fetch_add(read as u64, Ordering::Relaxed);
             if last_report.elapsed() >= Duration::from_millis(200) {
-                report(downloaded);
+                report();
                 last_report = Instant::now();
             }
         }
     }
-    file.flush().map_err(|error| failed(error.to_string()))?;
-    report(downloaded);
-    Ok(())
+    file.flush().map_err(|error| failed(error.to_string()))
 }
 
 fn extract(archive: &Path, staging: &Path) -> Result<(), String> {
