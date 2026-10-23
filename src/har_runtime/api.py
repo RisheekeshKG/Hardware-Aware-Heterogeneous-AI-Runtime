@@ -550,6 +550,24 @@ def worker_connection() -> dict[str, Any] | None:
         raise HTTPException(status_code=502, detail=f"Worker service isn't responding: {error}") from error
 
 
+@app.post("/api/worker-connection/stop")
+def stop_working_for_host() -> dict[str, Any]:
+    """Forget the remembered coordinator so the worker stops auto-retrying every 5 seconds."""
+
+    import httpx
+
+    if _session["role"] != "worker":
+        raise HTTPException(status_code=400, detail="This computer isn't in Worker mode")
+    try:
+        response = httpx.post(f"{_local_worker_url()}/worker/stop-serving-host", timeout=5.0)
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"Worker service isn't responding: {error}") from error
+    if response.status_code >= 400:
+        detail = response.json().get("detail", response.text) if response.content else response.reason_phrase
+        raise HTTPException(status_code=response.status_code, detail=detail)
+    return response.json()
+
+
 @app.get("/api/trusted-hosts")
 def trusted_hosts() -> list[dict[str, Any]]:
     """Hosts the local worker will accept jobs from (empty when not a worker)."""

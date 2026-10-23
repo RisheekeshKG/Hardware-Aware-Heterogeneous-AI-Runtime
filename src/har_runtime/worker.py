@@ -413,6 +413,18 @@ def _record_job() -> None:
         _connection["last_job_at"] = datetime.now(timezone.utc).isoformat()
 
 
+@worker_app.post("/worker/stop-serving-host")
+def stop_serving_host(http_request: Request) -> dict[str, Any]:
+    """Clear the remembered coordinator and halt the registration retry loop. Loopback-only."""
+
+    _require_loopback(http_request)
+    coordinator = _worker_config.get("coordinator") or ""
+    if not coordinator:
+        return {"status": "already-idle"}
+    _stop_serving_host(_registration_generation)
+    return {"status": "stopped", "coordinator": coordinator}
+
+
 @worker_app.get("/worker/connection")
 def connection_status(http_request: Request) -> dict[str, Any]:
     """Which host this worker serves and whether it can reach it right now. Loopback-only."""
