@@ -27,6 +27,7 @@ har = "har_runtime.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["har*", "har_runtime*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

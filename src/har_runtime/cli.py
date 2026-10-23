@@ -56,6 +56,41 @@ def devices() -> None:
 
 
 @app.command()
+def execute(
+    script: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True, help="Python file to run"),
+    args: Optional[list[str]] = typer.Argument(None, help="Arguments passed through to the script"),
+    show_decisions: bool = typer.Option(True, "--show-decisions/--no-decisions", help="Print the router decisions after the script exits"),
+) -> None:
+    """Run a Python script with the HAR SDK pre-loaded, routing @har.offload calls across devices.
+
+    The script runs in this process so @har.offload decorators dispatch through the HAR router.
+    """
+
+    import runpy
+    import sys
+
+    from .sdk.decorator import _last_decisions  # type: ignore[attr-defined]
+
+    previous_argv = sys.argv
+    sys.argv = [str(script), *(args or [])]
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        sys.argv = previous_argv
+
+    if show_decisions and _last_decisions:
+        typer.echo("")
+        typer.echo("HAR routing decisions:")
+        for name, decision in _last_decisions.items():
+            typer.echo(
+                f"  {name}: {decision.backend} ({decision.device_name}) "
+                f"in {decision.elapsed_seconds * 1000:.2f} ms"
+                + (f", moved {decision.transfer_bytes} B" if decision.transfer_bytes else "")
+                + f" — {decision.reason}"
+            )
+
+
+@app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", help="API bind address"),
     port: int = typer.Option(8000, min=1, max=65535, help="API port"),
