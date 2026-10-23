@@ -159,3 +159,6 @@ button { cursor: pointer; }
 .worker-connection > div { display: grid; gap: 5px; }
 .worker-connection strong { color: #e8edf1; font-size: 14px; }
 .worker-connection span:not(.eyebrow):not(.status-dot) { color: var(--soft); font-size: 12px; line-height: 1.5; }
+/* Fill the space beside the sidebar instead of the full window width, which
+   pushed the right edge of every page (e.g. banner buttons) off-screen. */
+.main-content { flex: 1 1 auto; min-width: 0; width: auto; max-width: 1440px; }
