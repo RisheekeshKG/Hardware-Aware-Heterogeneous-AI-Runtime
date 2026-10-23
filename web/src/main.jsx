@@ -507,6 +507,8 @@ function ScriptDetail({ script, onClose, devices, nodes, cpuInfo }) {
   const elapsed = scriptElapsed(script)
   const hasOutput = Boolean(script.output && script.output.length)
   const machine = targetMachine(script, devices, nodes)
+  const isLocal = script.target_node === 'local'
+  const machineCpuInfo = isLocal ? cpuInfo : null
   return <section className="panel script-detail">
     <div className="section-heading compact"><div><div className="eyebrow">SCRIPT DETAIL</div><h2>{script.filename}</h2></div><div className="script-detail-actions"><StatusBadge status={script.status} />{onClose && <button type="button" className="close-button" onClick={onClose} aria-label="Close script detail">X</button>}</div></div>
     <div className="placement-grid">
@@ -515,7 +517,7 @@ function ScriptDetail({ script, onClose, devices, nodes, cpuInfo }) {
       <Placement label="Elapsed" value={elapsed != null ? `${elapsed.toFixed(2)} s` : '-'} />
       <Placement label="Exit code" value={script.exit_code == null ? '-' : String(script.exit_code)} accent={script.exit_code === 0 ? 'cuda' : (script.exit_code == null ? '' : 'transfer')} />
     </div>
-    {machine && machine.backends.length ? <div className="hardware-block"><div className="hardware-head"><span className="eyebrow">HARDWARE AVAILABLE ON TARGET</span>{machine.status && machine.status !== 'online' ? <StatusBadge status={machine.status} /> : null}</div><div className="hardware-list">{machine.backends.filter((b) => b.available !== false).map((backend) => <div className="hardware-row" key={backend.backend}><BackendBadge backend={backend.backend} /><div><strong>{backendLineLabel(backend, cpuInfo)}</strong><span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free / ${formatBytes(backend.memory.total_bytes)}` : (backend.memory?.unavailable_reason || 'Memory unavailable')}</span></div></div>)}</div><div className="policy-note"><span className="status-dot preview" /><span>The script picks which of these to use at runtime. HAR shows every backend available on the target.</span></div></div> : null}
+    {machine && machine.backends.length ? <div className="hardware-block"><div className="hardware-head"><span className="eyebrow">HARDWARE AVAILABLE ON TARGET</span>{machine.status && machine.status !== 'online' ? <StatusBadge status={machine.status} /> : null}</div><div className="hardware-list">{machine.backends.filter((b) => b.available !== false).map((backend) => <div className="hardware-row" key={backend.backend}><BackendBadge backend={backend.backend} /><div><strong>{backendLineLabel(backend, machineCpuInfo)}</strong><span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free / ${formatBytes(backend.memory.total_bytes)}` : (backend.memory?.unavailable_reason || 'Memory unavailable')}</span></div></div>)}</div><div className="policy-note"><span className="status-dot preview" /><span>The script picks which of these to use at runtime. HAR shows every backend available on the target.</span></div></div> : null}
     {script.args?.length ? <div className="script-args"><span className="eyebrow">ARGUMENTS</span><code>{script.args.join(' ')}</code></div> : null}
     {script.error ? <div className="form-error" style={{ marginTop: 14 }}>{script.error}</div> : null}
     <div className="script-output-head"><span className="eyebrow">OUTPUT (STDOUT + STDERR)</span><span>{hasOutput ? `${script.output.length} chars` : (script.status === 'running' ? 'Buffered until exit' : 'No output')}</span></div>
