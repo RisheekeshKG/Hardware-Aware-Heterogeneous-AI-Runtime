@@ -189,6 +189,9 @@ async def restrict_remote_clients(request, call_next):
 
 _runs: dict[str, RunRecord] = {}
 _nodes: dict[str, dict[str, Any]] = {}
+# Workers removed with Disconnect. Their registrations get 410 Gone, which tells
+# the worker to stop, until the user adds the device again.
+_disconnected_nodes: set[str] = set()
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark")
 _script_runs: dict[str, "ScriptRecord"] = {}
 
@@ -407,6 +410,8 @@ def _run_remote_benchmark(record: RunRecord, node: dict[str, Any]) -> None:
 
 @app.post("/api/nodes/register")
 def register_node(registration: NodeRegistration) -> dict[str, Any]:
+    if registration.node_id in _disconnected_nodes:
+        raise HTTPException(status_code=410, detail="This host disconnected you")
     now = datetime.now(timezone.utc).isoformat()
     node = _nodes.get(registration.node_id, {})
     node.update(
@@ -462,6 +467,7 @@ def disconnect_node(node_id: str) -> dict[str, str]:
     removed = _nodes.pop(node_id, None)
     if removed is None:
         raise HTTPException(status_code=404, detail="Node is not registered")
+    _disconnected_nodes.add(node_id)
     return {"status": "disconnected", "node_id": node_id}
 
 
@@ -526,6 +532,22 @@ def pairing_requests() -> list[dict[str, Any]]:
         raise HTTPException(status_code=502, detail=f"This computer's worker service isn't responding: {error}") from error
     except ValueError as error:
         raise HTTPException(status_code=502, detail=f"Worker returned an unexpected response: {error}") from error
+
+
+@app.get("/api/worker-connection")
+def worker_connection() -> dict[str, Any] | None:
+    """The host this computer's worker serves and whether it is reachable (null when not a worker)."""
+
+    import httpx
+
+    if _session["role"] != "worker":
+        return None
+    try:
+        response = httpx.get(f"{_local_worker_url()}/worker/connection", timeout=2.0)
+        response.raise_for_status()
+        return response.json()
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"Worker service isn't responding: {error}") from error
 
 
 @app.get("/api/trusted-hosts")
@@ -609,7 +631,9 @@ def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
                         time.sleep(1.0)
                         continue
                     response.raise_for_status()
-                    return response.json()
+                    joined = response.json()
+                    _disconnected_nodes.discard(joined.get("node_id", ""))
+                    return joined
                 except httpx.RequestError as error:
                     last_error = error
                     time.sleep(1.0)

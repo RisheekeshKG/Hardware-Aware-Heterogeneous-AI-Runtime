@@ -153,3 +153,9 @@ button { cursor: pointer; }
 .trusted-host-row > div { display: grid; gap: 4px; }
 .trusted-host-row strong { color: #e6edef; font: 12px 'DM Mono'; }
 .trusted-host-row span { color: var(--muted); font: 9px 'DM Mono'; }
+.status-dot.warn { background: var(--amber); box-shadow: 0 0 11px rgba(255, 189, 114, .35); }
+.worker-connection { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; padding: 16px 20px; }
+.worker-connection .status-dot { margin-top: 6px; }
+.worker-connection > div { display: grid; gap: 5px; }
+.worker-connection strong { color: #e8edf1; font-size: 14px; }
+.worker-connection span:not(.eyebrow):not(.status-dot) { color: var(--soft); font-size: 12px; line-height: 1.5; }

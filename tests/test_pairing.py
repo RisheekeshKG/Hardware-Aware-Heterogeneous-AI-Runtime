@@ -102,3 +102,58 @@ def test_cors_rejects_unknown_websites():
 )
 def test_worker_address_normalization(raw, expected):
     assert api._normalize_worker_url(raw) == expected
+
+
+@pytest.fixture
+def connection(monkeypatch):
+    state = {"connected_at": None, "last_contact": None, "last_error": None, "disconnected_by_host": False, "jobs_received": 0, "last_job_at": None}
+    monkeypatch.setattr(worker, "_connection", state)
+    monkeypatch.setitem(worker._worker_config, "coordinator", "")
+    return state
+
+
+def test_connection_waits_without_a_host(connection):
+    status = local(worker.worker_app).get("/worker/connection").json()
+    assert status["status"] == "waiting"
+    assert status["host_ip"] is None
+
+
+def test_connection_reports_recent_contact(connection, monkeypatch):
+    monkeypatch.setitem(worker._worker_config, "coordinator", f"http://{HOST_IP}:8000")
+    connection["last_contact"] = worker.time.monotonic() - 2
+    status = local(worker.worker_app).get("/worker/connection").json()
+    assert status["status"] == "connected"
+    assert status["host_ip"] == HOST_IP
+
+
+def test_connection_reports_unreachable_host(connection, monkeypatch):
+    monkeypatch.setitem(worker._worker_config, "coordinator", f"http://{HOST_IP}:8000")
+    connection["last_contact"] = worker.time.monotonic() - 60
+    connection["last_error"] = "timed out"
+    status = local(worker.worker_app).get("/worker/connection").json()
+    assert status["status"] == "unreachable"
+    assert status["last_error"] == "timed out"
+
+
+def test_connection_status_is_local_only(connection):
+    assert remote(worker.worker_app).get("/worker/connection").status_code == 403
+
+
+def test_host_disconnect_stops_worker(connection, monkeypatch, tmp_path):
+    monkeypatch.setitem(worker._worker_config, "coordinator", f"http://{HOST_IP}:8000")
+    monkeypatch.setattr(worker, "_last_host_path", tmp_path / "last-host.json")
+    (tmp_path / "last-host.json").write_text("{}")
+    worker._stop_serving_host(worker._registration_generation)
+    status = local(worker.worker_app).get("/worker/connection").json()
+    assert status["status"] == "disconnected"
+    assert not (tmp_path / "last-host.json").exists()
+
+
+def test_disconnected_node_cannot_reregister(monkeypatch):
+    monkeypatch.setattr(api, "_nodes", {})
+    monkeypatch.setattr(api, "_disconnected_nodes", set())
+    registration = {"node_id": "pc-1", "name": "PC", "base_url": "http://10.0.0.20:9000", "capabilities": []}
+    client = remote(api.app, "10.0.0.20")
+    assert client.post("/api/nodes/register", json=registration).status_code == 200
+    assert local(api.app).delete("/api/nodes/pc-1").status_code == 200
+    assert client.post("/api/nodes/register", json=registration).status_code == 410

@@ -105,6 +105,8 @@ function App() {
   const [toast, setToast] = useState('')
   const [pairing, setPairing] = useState([])
   const [trustedHosts, setTrustedHosts] = useState([])
+  const [workerConnection, setWorkerConnection] = useState(null)
+  const lastConnectionStatus = useRef(null)
   const connectedOnce = useRef(false)
   const startedAt = useRef(Date.now())
 
@@ -128,6 +130,21 @@ function App() {
       setScripts(await scriptsResponse.json())
       fetch(`${API}/api/pairing`).then((response) => response.ok ? response.json() : []).then(setPairing).catch(() => setPairing([]))
       fetch(`${API}/api/trusted-hosts`).then((response) => response.ok ? response.json() : []).then(setTrustedHosts).catch(() => setTrustedHosts([]))
+      fetch(`${API}/api/worker-connection`)
+        // 404 means the installed runtime predates connection status.
+        .then((response) => response.status === 404 ? { status: 'unsupported' } : response.ok ? response.json() : null)
+        .then((connection) => {
+          const previous = lastConnectionStatus.current
+          const next = connection?.status || null
+          if (previous && previous !== next) {
+            if (next === 'connected') notify(`Connected to host ${connection.host_ip}. It can now send tasks to this computer.`)
+            else if (next === 'unreachable' && previous === 'connected') notify(`Lost contact with host ${connection.host_ip}. Retrying...`)
+            else if (next === 'disconnected') notify('The host disconnected this computer.')
+          }
+          lastConnectionStatus.current = next
+          setWorkerConnection(connection)
+        })
+        .catch(() => setWorkerConnection(null))
       setRuntime(data)
       setError('')
       connectedOnce.current = true
@@ -215,7 +232,7 @@ function App() {
       <div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div>
       {navGroups.map((group) => <React.Fragment key={group.id}><div className={`nav-group-label ${group.id === 'devtools' ? 'devtools' : ''}`}>{group.label}</div><nav className="main-nav" aria-label={`${group.label} navigation`}>{navItems.filter((item) => item.group === group.id).map((item) => <button key={item.id} className={`nav-item ${view === item.id ? 'active' : ''}`} onClick={() => setView(item.id)}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button>)}</nav></React.Fragment>)}
       <div className="sidebar-spacer" />
-      <div className="sidebar-note"><span className="eyebrow">HAR STATUS</span><strong>{error ? 'Needs attention' : 'Ready to help'}</strong><span>{loading ? 'Checking your devices...' : 'Connected to this computer'}</span></div>
+      <div className="sidebar-note"><span className="eyebrow">HAR STATUS</span><strong>{error ? 'Needs attention' : 'Ready to help'}</strong><span>{loading ? 'Checking your devices...' : workerConnection?.status === 'connected' ? `Working for host ${workerConnection.host_ip}` : 'Connected to this computer'}</span></div>
       <div className="connection-status"><span className={`status-dot ${error ? 'error' : ''}`} /><span>{error ? 'NOT CONNECTED' : 'CONNECTED'}</span><small>{loading ? 'Checking devices...' : (() => { const machines = (runtime.devices.filter((d) => d.available).length ? 1 : 0) + runtime.nodes.filter((n) => n.name !== 'This device' && n.status === 'online').length; return `${machines} machine${machines === 1 ? '' : 's'} ready` })()}</small></div>
     </aside>
 
@@ -225,7 +242,7 @@ function App() {
       {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>Make sure the HAR service is running, then try again.</span></div><button onClick={loadRuntime}>Try again</button></div>}
       {view === 'runtime' && <RuntimeView devices={runtime.devices} nodes={runtime.nodes} runs={runtime.runs} activeRun={activeRun} cpuInfo={cpuInfo} onLaunch={() => setShowLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
       {view === 'workloads' && <WorkloadsView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
-      {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} trustedHosts={trustedHosts} onConnect={() => setShowConnect(true)} onDisconnect={disconnectNode} onRefresh={loadRuntime} onRevokeTrustedHost={async (ip) => { if (!window.confirm(`Revoke trust for ${ip}? HAR will refuse future jobs from this host.`)) return; try { const r = await fetch(`${API}/api/trusted-hosts/${encodeURIComponent(ip)}`, { method: 'DELETE' }); if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${r.status}`) } notify(`${ip} is no longer trusted.`); await loadRuntime() } catch (e) { notify(`Could not revoke: ${e.message}`) } }} />}
+      {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} trustedHosts={trustedHosts} workerConnection={workerConnection} onConnect={() => setShowConnect(true)} onDisconnect={disconnectNode} onRefresh={loadRuntime} onRevokeTrustedHost={async (ip) => { if (!window.confirm(`Revoke trust for ${ip}? HAR will refuse future jobs from this host.`)) return; try { const r = await fetch(`${API}/api/trusted-hosts/${encodeURIComponent(ip)}`, { method: 'DELETE' }); if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${r.status}`) } notify(`${ip} is no longer trusted.`); await loadRuntime() } catch (e) { notify(`Could not revoke: ${e.message}`) } }} />}
       {view === 'traces' && <TracesView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
       {view === 'benchmarks' && <BenchmarksView runs={runtime.runs} trace={trace} selectedRun={selectedRun} onLaunch={() => setShowLauncher(true)} onSelectRun={setSelectedRunId} onRefresh={loadRuntime} />}
     </main>
@@ -388,7 +405,25 @@ function RolePanel() {
   return <section className="role-panel panel"><div className="role-panel-head"><div><span className="eyebrow">THIS COMPUTER'S ROLE</span><p>{roleOptions.find((option) => option.id === role)?.detail}</p>{lanAddress && <p className="role-ip">This PC's address: <code>{lanAddress}</code> <button className="link-button" onClick={() => navigator.clipboard?.writeText(lanAddress)}>Copy</button></p>}</div><div className="role-options" role="radiogroup" aria-label="Runtime role">{roleOptions.map((option) => <button key={option.id} role="radio" aria-checked={role === option.id} className={`role-option ${role === option.id ? 'active' : ''}`} onClick={() => change(option.id)} disabled={switching}>{option.label}</button>)}</div></div>{role === 'worker' && <div className="role-address"><span>On the other computer, choose <strong>Add device</strong> and enter</span><code>{workerAddress || 'http://<this-computer-IP>:9000'}</code>{workerAddress && <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(workerAddress)}>Copy</button>}</div>}{error && <div className="form-error">{error}</div>}</section>
 }
 
-function FabricView({ devices, nodes, cpuInfo, trustedHosts, onConnect, onDisconnect, onRefresh, onRevokeTrustedHost }) {
+function WorkerConnectionPanel({ connection }) {
+  if (!connection) return null
+  if (connection.status === 'unsupported') {
+    return <section className="panel worker-connection"><span className="status-dot warn" /><div><strong>Connection status needs a newer runtime</strong><span>The installed runtime is older than this app, so it can't report which host is connected. Update the runtime to see it here.</span></div></section>
+  }
+  const ago = (seconds) => seconds == null ? '' : seconds < 2 ? 'just now' : `${Math.round(seconds)}s ago`
+  const host = connection.host_ip
+  const jobs = connection.jobs_received ? ` · ${connection.jobs_received} task${connection.jobs_received === 1 ? '' : 's'} received${connection.running_jobs ? `, ${connection.running_jobs} running` : ''}` : ''
+  const views = {
+    connected: { dot: '', title: `Connected to host ${host}`, detail: `Last contact ${ago(connection.seconds_since_contact)}${jobs}. This computer is ready to take tasks from it.` },
+    unreachable: { dot: 'error', title: `Can't reach host ${host}`, detail: `${connection.last_error ? `${connection.last_error}. ` : ''}Retrying every 5 seconds. Check that the host is running HAR and both computers are on the same network.` },
+    waiting: { dot: 'warn', title: 'Waiting for a host', detail: "No host is connected yet. On the host, choose Add device and enter this PC's address." },
+    disconnected: { dot: 'warn', title: 'The host disconnected this computer', detail: 'It will stop sending tasks. Add this computer again on the host to reconnect.' },
+  }
+  const view = views[connection.status] || views.waiting
+  return <section className="panel worker-connection"><span className={`status-dot ${view.dot}`} /><div><span className="eyebrow">WORKING FOR</span><strong>{view.title}</strong><span>{view.detail}</span></div></section>
+}
+
+function FabricView({ devices, nodes, cpuInfo, trustedHosts, workerConnection, onConnect, onDisconnect, onRefresh, onRevokeTrustedHost }) {
   const localAvailable = devices.filter((device) => device.available)
   const local = localAvailable.map((device) => ({ ...device, kind: 'ON THIS COMPUTER', state: 'online', name: deviceHeading(device, cpuInfo), detail: 'Ready to use' }))
   const remoteNodes = nodes.filter((node) => node.name !== 'This device')
@@ -397,7 +432,7 @@ function FabricView({ devices, nodes, cpuInfo, trustedHosts, onConnect, onDiscon
   const machineCount = (localAvailable.length ? 1 : 0) + remoteNodes.length
   const machinesReady = (localAvailable.length ? 1 : 0) + remoteNodes.filter((node) => node.status === 'online').length
   const runtimesReady = all.filter((device) => device.state === 'online').length
-  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button></div>} /><RolePanel /><TrustedHostsPanel hosts={trustedHosts} onRevoke={onRevokeTrustedHost} /><div className="fabric-banner"><div><span className="status-dot" /><strong>{machinesReady} device{machinesReady === 1 ? '' : 's'} available</strong><span>{runtimesReady} runtime{runtimesReady === 1 ? '' : 's'} across {machineCount} machine{machineCount === 1 ? '' : 's'}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} onDisconnect={onDisconnect} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
+  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button></div>} /><RolePanel /><WorkerConnectionPanel connection={workerConnection} /><TrustedHostsPanel hosts={trustedHosts} onRevoke={onRevokeTrustedHost} /><div className="fabric-banner"><div><span className="status-dot" /><strong>{machinesReady} device{machinesReady === 1 ? '' : 's'} available</strong><span>{runtimesReady} runtime{runtimesReady === 1 ? '' : 's'} across {machineCount} machine{machineCount === 1 ? '' : 's'}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} onDisconnect={onDisconnect} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
 }
 
 function TrustedHostsPanel({ hosts, onRevoke }) {

@@ -106,6 +106,17 @@ PAIRING_REQUEST_TTL_SECONDS = 120.0
 _trusted_hosts: set[str] = set()
 _pairing_requests: dict[str, dict[str, Any]] = {}
 _pairing_lock = threading.Lock()
+# What the person at this computer sees about the host it works for.
+HOST_CONTACT_TIMEOUT_SECONDS = 15.0
+_connection: dict[str, Any] = {
+    "connected_at": None,
+    "last_contact": None,
+    "last_error": None,
+    "disconnected_by_host": False,
+    "jobs_received": 0,
+    "last_job_at": None,
+}
+_connection_lock = threading.Lock()
 
 
 def _load_trusted_hosts() -> None:
@@ -362,6 +373,7 @@ def start_worker_run(request: MatmulRunRequest, http_request: Request) -> dict[s
     record = WorkerRun(request)
     _worker_runs[record.id] = record
     _worker_executor.submit(_execute, record)
+    _record_job()
     return record.to_dict()
 
 
@@ -373,6 +385,7 @@ def start_worker_script(request: ScriptRunRequest, http_request: Request) -> dic
     record = WorkerScriptRun(request)
     _worker_script_runs[record.id] = record
     _worker_executor.submit(_execute_script, record)
+    _record_job()
     return record.to_dict()
 
 
@@ -394,6 +407,39 @@ def worker_run_status(run_id: str, http_request: Request) -> dict[str, Any]:
     return record.to_dict()
 
 
+def _record_job() -> None:
+    with _connection_lock:
+        _connection["jobs_received"] += 1
+        _connection["last_job_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@worker_app.get("/worker/connection")
+def connection_status(http_request: Request) -> dict[str, Any]:
+    """Which host this worker serves and whether it can reach it right now. Loopback-only."""
+
+    _require_loopback(http_request)
+    coordinator = _worker_config.get("coordinator") or ""
+    with _connection_lock:
+        state = dict(_connection)
+    last_contact = state.pop("last_contact")
+    seconds_since_contact = time.monotonic() - last_contact if last_contact is not None else None
+    if not coordinator:
+        status = "disconnected" if state["disconnected_by_host"] else "waiting"
+    elif seconds_since_contact is not None and seconds_since_contact <= HOST_CONTACT_TIMEOUT_SECONDS:
+        status = "connected"
+    else:
+        status = "unreachable"
+    running = sum(1 for record in [*_worker_runs.values(), *_worker_script_runs.values()] if record.status in {"queued", "running"})
+    return {
+        "status": status,
+        "coordinator": coordinator,
+        "host_ip": urlsplit(coordinator).hostname if coordinator else None,
+        "seconds_since_contact": round(seconds_since_contact, 1) if seconds_since_contact is not None else None,
+        "running_jobs": running,
+        **state,
+    }
+
+
 def _registration_loop(generation: int) -> None:
     coordinator = _worker_config["coordinator"].rstrip("/")
     registration = {
@@ -412,11 +458,38 @@ def _registration_loop(generation: int) -> None:
     with httpx.Client(timeout=10.0) as client:
         while generation == _registration_generation:
             try:
-                client.post(f"{coordinator}/api/nodes/register", json=registration).raise_for_status()
+                response = client.post(f"{coordinator}/api/nodes/register", json=registration)
+                if response.status_code == 410:
+                    # The host removed this computer; stop until a host connects again.
+                    _stop_serving_host(generation)
+                    return
+                response.raise_for_status()
                 client.post(f"{coordinator}/api/nodes/heartbeat", json={"node_id": registration["node_id"], "active_job": None})
-            except httpx.HTTPError:
-                pass
+                with _connection_lock:
+                    now = time.monotonic()
+                    if _connection["connected_at"] is None:
+                        _connection["connected_at"] = datetime.now(timezone.utc).isoformat()
+                    _connection["last_contact"] = now
+                    _connection["last_error"] = None
+            except httpx.HTTPError as error:
+                with _connection_lock:
+                    _connection["last_error"] = str(error) or type(error).__name__
             time.sleep(5)
+
+
+def _stop_serving_host(generation: int) -> None:
+    global _registration_generation
+    with _config_lock:
+        if generation != _registration_generation:
+            return
+        _registration_generation += 1
+        _worker_config["coordinator"] = ""
+    with _connection_lock:
+        _connection.update(connected_at=None, last_contact=None, last_error=None, disconnected_by_host=True)
+    try:
+        _last_host_path.unlink()
+    except OSError:
+        pass
 
 
 def _default_name() -> str:
@@ -481,6 +554,8 @@ def configure_worker(
         )
         _registration_generation += 1
         generation = _registration_generation
+        with _connection_lock:
+            _connection.update(connected_at=None, last_contact=None, last_error=None, disconnected_by_host=False)
         if _discovery_beacon:
             _discovery_beacon.stop()
         _discovery_beacon = DiscoveryBeacon(
