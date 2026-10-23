@@ -69,7 +69,7 @@ def execute(
     import runpy
     import sys
 
-    from .sdk.decorator import _last_decisions  # type: ignore[attr-defined]
+    from har.decorator import _last_decisions  # type: ignore[attr-defined]
 
     previous_argv = sys.argv
     sys.argv = [str(script), *(args or [])]
