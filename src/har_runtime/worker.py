@@ -64,6 +64,8 @@ class WorkerScriptRun:
         self.error: str | None = None
         self.exit_code: int | None = None
         self.created_at = datetime.now(timezone.utc).isoformat()
+        self.started_at: str | None = None
+        self.finished_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +76,8 @@ class WorkerScriptRun:
             "error": self.error,
             "exit_code": self.exit_code,
             "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
         }
 
 
@@ -210,6 +214,7 @@ def _execute(record: WorkerRun) -> None:
 
 def _execute_script(record: WorkerScriptRun) -> None:
     record.status = "running"
+    record.started_at = datetime.now(timezone.utc).isoformat()
     try:
         with tempfile.TemporaryDirectory(prefix="har-worker-job-") as directory:
             script_path = Path(directory) / Path(record.request.filename).name
@@ -232,6 +237,8 @@ def _execute_script(record: WorkerScriptRun) -> None:
     except Exception as error:
         record.error = str(error)
         record.status = "failed"
+    finally:
+        record.finished_at = datetime.now(timezone.utc).isoformat()
 
 
 @worker_app.get("/worker/health")

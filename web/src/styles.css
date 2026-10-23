@@ -103,3 +103,18 @@ button { cursor: pointer; }
 .code-editor-wrap .cm-scroller { font-family: inherit; }
 .code-editor-wrap .cm-gutters { background: #0a0d12; border-right: 1px solid var(--border); color: #4a5560; }
 .code-editor-wrap .cm-activeLineGutter, .code-editor-wrap .cm-activeLine { background: rgba(217, 255, 114, .05); }
+
+.timings-block { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--border); background: rgba(10, 13, 16, .6); }
+.timings-head { margin-bottom: 10px; }
+.timings-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+.timings-grid .small-metric strong { color: var(--lime); font: 13px 'DM Mono'; font-weight: 400; }
+.timings-grid .small-metric span { color: var(--muted); font: 9px 'DM Mono'; }
+.timings-block .policy-note { margin-top: 10px; }
+
+.connect-modal { width: min(640px, 100%); }
+.discovered-list { display: grid; gap: 8px; margin-top: 10px; }
+.discovered-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); background: var(--panel); }
+.discovered-row > div { display: grid; gap: 4px; min-width: 0; }
+.discovered-row strong { color: #dbe4e6; font-size: 12px; }
+.discovered-row span { color: var(--muted); font: 10px 'DM Mono'; overflow-wrap: anywhere; }
+.discovered-row .secondary-button { flex: 0 0 auto; }

@@ -203,6 +203,9 @@ class ScriptRecord:
         self.exit_code: int | None = None
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.updated_at = self.created_at
+        self.started_at: str | None = None  # when the interpreter actually started
+        self.finished_at: str | None = None  # when it returned (local) or the worker reported done
+        self.remote_execute_seconds: float | None = None  # end-to-end on the worker, from its own clock
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -216,6 +219,9 @@ class ScriptRecord:
             "exit_code": self.exit_code,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "remote_execute_seconds": self.remote_execute_seconds,
         }
 
 
@@ -230,7 +236,8 @@ def _run_script_in_process(record: ScriptRecord) -> None:
     """Run a user-approved file without invoking a shell command."""
 
     record.status = "running"
-    record.updated_at = datetime.now(timezone.utc).isoformat()
+    record.started_at = datetime.now(timezone.utc).isoformat()
+    record.updated_at = record.started_at
     try:
         with tempfile.TemporaryDirectory(prefix="har-job-") as directory:
             script_path = Path(directory) / record.request.filename
@@ -254,7 +261,8 @@ def _run_script_in_process(record: ScriptRecord) -> None:
         record.error = str(error)
         record.status = "failed"
     finally:
-        record.updated_at = datetime.now(timezone.utc).isoformat()
+        record.finished_at = datetime.now(timezone.utc).isoformat()
+        record.updated_at = record.finished_at
 _discovery: DiscoveryRegistry | None = None
 _discovery_lock = threading.Lock()
 
@@ -597,6 +605,8 @@ def _run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
     import httpx
 
     record.status = "running"
+    record.started_at = datetime.now(timezone.utc).isoformat()
+    record.updated_at = record.started_at
     try:
         with httpx.Client(timeout=30.0) as client:
             response = client.post(f"{node['base_url']}/worker/scripts", json=record.request.model_dump())
@@ -612,13 +622,24 @@ def _run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                 record.error = worker_record.get("error")
                 record.exit_code = worker_record.get("exit_code")
                 if record.status in {"completed", "failed"}:
+                    # Pull the worker-side timing when available so we can show transport vs execute.
+                    worker_started = worker_record.get("started_at") or worker_record.get("created_at")
+                    worker_finished = worker_record.get("finished_at") or worker_record.get("updated_at")
+                    if worker_started and worker_finished:
+                        try:
+                            start_dt = datetime.fromisoformat(worker_started.replace("Z", "+00:00"))
+                            end_dt = datetime.fromisoformat(worker_finished.replace("Z", "+00:00"))
+                            record.remote_execute_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
+                        except ValueError:
+                            record.remote_execute_seconds = None
                     break
                 time.sleep(0.25)
     except Exception as error:
         record.status = "failed"
         record.error = f"Remote device '{record.request.target_node}' failed: {error}"
     finally:
-        record.updated_at = datetime.now(timezone.utc).isoformat()
+        record.finished_at = datetime.now(timezone.utc).isoformat()
+        record.updated_at = record.finished_at
         node["active_job"] = None
 
 

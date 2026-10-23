@@ -417,9 +417,35 @@ function ConnectDevice({ onClose, onConnected }) {
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [waiting, setWaiting] = useState(false)
+  const [discovered, setDiscovered] = useState([])
+  const [scanning, setScanning] = useState(false)
+  const [scannedOnce, setScannedOnce] = useState(false)
+
+  const scan = async () => {
+    setScanning(true); setError('')
+    try {
+      const response = await fetch(`${API}/api/discovery`)
+      if (!response.ok) throw new Error('Could not scan the network')
+      setDiscovered(await response.json())
+      setScannedOnce(true)
+    } catch (scanError) { setError(scanError.message) } finally { setScanning(false) }
+  }
+
+  useEffect(() => { scan() }, [])
+
+  const connectDiscovered = async (node) => {
+    setWaiting(true); setError('')
+    try {
+      const response = await fetch(`${API}/api/discovery/connect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ node_id: node.node_id, name: name.trim() || node.name || null }) })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Could not connect this device')
+      await onConnected()
+    } catch (connectError) { setError(connectError.message) } finally { setWaiting(false) }
+  }
+
   const submit = async (event) => {
     event.preventDefault(); setError('')
-    if (!workerUrl.trim()) { setError("Enter the address shown on the other computer's Devices page."); return }
+    if (!workerUrl.trim()) { setError("Scan the network above, or type an address."); return }
     setWaiting(true)
     try {
       const response = await fetch(`${API}/api/nodes/connect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_url: workerUrl.trim(), name: name.trim() || null }) })
@@ -428,7 +454,21 @@ function ConnectDevice({ onClose, onConnected }) {
       await onConnected()
     } catch (connectError) { setError(connectError.message) } finally { setWaiting(false) }
   }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">ADD DEVICE</div><h2>Connect another computer</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>Open the HAR worker app on the other computer, then enter the address shown there.</p><label>Device address<input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="192.168.1.25:9000" disabled={waiting} autoFocus /></label><label>Device name <span className="optional">OPTIONAL</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></label><div className="advanced-note">{waiting ? 'Waiting for someone to click Accept on the other computer (up to 2 minutes)...' : 'Set the other computer to Worker on its Devices page. After you connect, click Accept there.'}</div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={waiting}>{waiting ? 'Waiting for approval...' : 'Connect device'} <span>-&gt;</span></button></div></form></div>
+
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal connect-modal" onSubmit={submit}>
+    <div className="modal-header"><div><div className="eyebrow">ADD DEVICE</div><h2>Connect another computer</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
+    <p>HAR workers broadcast themselves on the LAN. Pick one from the scan below, or paste an address if you already know it.</p>
+
+    <div className="section-heading compact" style={{ marginTop: 18 }}><div><span className="eyebrow">HAR USERS ON YOUR NETWORK</span></div><button type="button" className="text-button" onClick={scan} disabled={scanning}>{scanning ? 'Scanning...' : 'Rescan'}</button></div>
+    {discovered.length ? <div className="discovered-list">{discovered.map((node) => <div className="discovered-row" key={node.node_id}><div><strong>{node.name || node.node_id}</strong><span>{node.base_url || node.address || node.node_id}</span></div><button type="button" className="secondary-button" onClick={() => connectDiscovered(node)} disabled={waiting}>Connect</button></div>)}</div> : <div className="empty-copy">{scannedOnce ? 'No HAR workers found on the LAN. Make sure the other computer is set to Worker.' : 'Scanning for HAR workers...'}</div>}
+
+    <div className="section-heading compact" style={{ marginTop: 22 }}><div><span className="eyebrow">OR CONNECT BY ADDRESS</span></div></div>
+    <label>Device address<input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="192.168.1.25:9000" disabled={waiting} /></label>
+    <label>Nickname <span className="optional">OPTIONAL</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></label>
+    <div className="advanced-note">{waiting ? 'Waiting for someone to click Accept on the other computer (up to 2 minutes)...' : 'Set the other computer to Worker on its Devices page. After you connect, click Accept there.'}</div>
+    {error && <div className="form-error">{error}</div>}
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={waiting || !workerUrl.trim()}>{waiting ? 'Waiting for approval...' : 'Connect by address'} <span>-&gt;</span></button></div>
+  </form></div>
 }
 
 function backendsForTarget(targetNode, devices, nodes) {
@@ -479,6 +519,30 @@ function scriptElapsed(script) {
   const seconds = (new Date(script.updated_at) - new Date(script.created_at)) / 1000
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null
 }
+function scriptTimings(script) {
+  const parse = (value) => value ? new Date(value).getTime() : null
+  const created = parse(script.created_at)
+  const started = parse(script.started_at)
+  const finished = parse(script.finished_at)
+  const updated = parse(script.updated_at)
+  const toSec = (ms) => (Number.isFinite(ms) && ms >= 0 ? ms / 1000 : null)
+  const total = toSec((finished || updated || 0) - (created || 0))
+  const queue = toSec((started || finished || updated || 0) - (created || 0))
+  const execute = script.remote_execute_seconds != null
+    ? script.remote_execute_seconds
+    : toSec((finished || updated || 0) - (started || 0))
+  const transport = total != null && execute != null && queue != null
+    ? Math.max(total - execute - queue, 0)
+    : null
+  const isRemote = script.target_node && script.target_node !== 'local'
+  return { total, queue, execute, transport: isRemote ? transport : 0, isRemote }
+}
+function formatSecondsShort(seconds) {
+  if (seconds == null) return '-'
+  if (seconds < 0.001) return `${(seconds * 1e6).toFixed(0)} µs`
+  if (seconds < 1) return `${(seconds * 1e3).toFixed(1)} ms`
+  return `${seconds.toFixed(2)} s`
+}
 function ScriptRow({ script, active, onClick, nodes }) {
   const elapsed = scriptElapsed(script)
   const argsText = script.args?.length ? script.args.join(' ') : ''
@@ -514,9 +578,13 @@ function ScriptDetail({ script, onClose, devices, nodes, cpuInfo }) {
     <div className="placement-grid">
       <Placement label="Machine" value={machine?.name || '-'} />
       <Placement label="Started" value={formatDate(script.created_at)} />
-      <Placement label="Elapsed" value={elapsed != null ? `${elapsed.toFixed(2)} s` : '-'} />
-      <Placement label="Exit code" value={script.exit_code == null ? '-' : String(script.exit_code)} accent={script.exit_code === 0 ? 'cuda' : (script.exit_code == null ? '' : 'transfer')} />
+      <Placement label="Total time" value={formatSecondsShort(scriptTimings(script).total)} />
+      <Placement label={scriptTimings(script).isRemote ? 'Transport' : 'Overhead'} value={formatSecondsShort(scriptTimings(script).transport)} accent={scriptTimings(script).isRemote ? 'transfer' : ''} />
     </div>
+    {(() => {
+      const timings = scriptTimings(script)
+      return <div className="timings-block"><div className="timings-head"><span className="eyebrow">TIMING BREAKDOWN</span></div><div className="timings-grid"><Metric label="Queue wait" value={formatSecondsShort(timings.queue)} /><Metric label={timings.isRemote ? 'Remote execute' : 'Execute'} value={formatSecondsShort(timings.execute)} /><Metric label="Transport" value={formatSecondsShort(timings.transport)} /><Metric label="Total" value={formatSecondsShort(timings.total)} /></div><div className="policy-note"><span className="status-dot preview" /><span>{timings.isRemote ? 'Transport covers host↔worker HTTP + polling. Remote execute comes from the worker’s own clock.' : 'Local runs have near-zero transport. Overhead is queue + runtime setup.'}</span></div></div>
+    })()}
     {machine && machine.backends.length ? <div className="hardware-block"><div className="hardware-head"><span className="eyebrow">HARDWARE AVAILABLE ON TARGET</span>{machine.status && machine.status !== 'online' ? <StatusBadge status={machine.status} /> : null}</div><div className="hardware-list">{machine.backends.filter((b) => b.available !== false).map((backend) => <div className="hardware-row" key={backend.backend}><BackendBadge backend={backend.backend} /><div><strong>{backendLineLabel(backend, machineCpuInfo)}</strong><span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free / ${formatBytes(backend.memory.total_bytes)}` : (backend.memory?.unavailable_reason || 'Memory unavailable')}</span></div></div>)}</div><div className="policy-note"><span className="status-dot preview" /><span>The script picks which of these to use at runtime. HAR shows every backend available on the target.</span></div></div> : null}
     {script.args?.length ? <div className="script-args"><span className="eyebrow">ARGUMENTS</span><code>{script.args.join(' ')}</code></div> : null}
     {script.error ? <div className="form-error" style={{ marginTop: 14 }}>{script.error}</div> : null}
