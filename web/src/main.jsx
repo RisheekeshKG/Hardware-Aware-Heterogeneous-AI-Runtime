@@ -270,17 +270,17 @@ function DeviceSummary({ device, cpuInfo }) { const memory = device.memory; cons
 function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo }) {
   const selectedScript = scripts.find((script) => script.id === selectedScriptId) || null
   return <>
-    <PageHeader eyebrow="SCRIPTS" title="Run Python" description="Send a Python file to a device and see what it printed, how long it ran, and whether it finished cleanly." action={<button className="primary-button" onClick={onScriptLaunch}><span>+</span> Run Python file</button>} />
+    <PageHeader eyebrow="SCRIPTS" title="Run Python" description="Write a Python script, pick a device, see what it printed and whether it finished cleanly." action={<button className="primary-button" onClick={onScriptLaunch}><span>+</span> New script</button>} />
     <section className="panel launch-card">
       <div className="eyebrow">GET STARTED</div>
-      <h2>Send a Python file to a device</h2>
-      <p>Pick a file, pick where it runs, see its stdout and exit code in HAR. The file runs in a temporary job folder on the selected device.</p>
-      <button className="large-launch" onClick={onScriptLaunch}><span className="launch-icon">-&gt;</span><span><strong>Run a Python file</strong><small>Choose a file, device, and optional arguments</small></span><span className="arrow">+</span></button>
-      <div className="policy-note"><span className="status-dot" /><span>Files run in a temporary job folder on the selected device.</span></div>
+      <h2>Write Python in HAR</h2>
+      <p>Type your script, pick where it runs, see its stdout and exit code here. @har.offload-decorated functions get routed per call; the rest runs in-process.</p>
+      <button className="large-launch" onClick={onScriptLaunch}><span className="launch-icon">-&gt;</span><span><strong>Write a new script</strong><small>Opens an in-app editor; you can also load an existing .py file to seed it</small></span><span className="arrow">+</span></button>
+      <div className="policy-note"><span className="status-dot" /><span>Scripts run in a temporary job folder on the selected device.</span></div>
     </section>
     <section className="section-block">
       <div className="section-heading"><div><div className="eyebrow">SCRIPT HISTORY</div><h2>Your Python runs</h2></div>{scripts.length ? <span className="chart-meta">{scripts.length} run{scripts.length === 1 ? '' : 's'}</span> : null}</div>
-      {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} nodes={nodes} active={script.id === selectedScriptId} onClick={() => onSelectScript(script.id === selectedScriptId ? null : script.id)} />)}</div> : <EmptyState title="No Python runs yet" detail="Run a Python file to see output and status here." action="Run Python file" onAction={onScriptLaunch} />}
+      {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} nodes={nodes} active={script.id === selectedScriptId} onClick={() => onSelectScript(script.id === selectedScriptId ? null : script.id)} />)}</div> : <EmptyState title="No Python runs yet" detail="Write a script to see output and status here." action="New script" onAction={onScriptLaunch} />}
       {selectedScript && <ScriptDetail script={selectedScript} onClose={() => onSelectScript(null)} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
     </section>
   </>
@@ -333,30 +333,83 @@ function TracesView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch,
   const selectedScript = scripts.find((script) => script.id === selectedScriptId) || scripts[0] || null
   return <>
     <PageHeader eyebrow="SCRIPT ACTIVITY" title="Activity" description="See what each Python run did: where it ran, how long it took, and its output." action={<select className="trace-select" value={selectedScript?.id || ''} onChange={(event) => onSelectScript(event.target.value || null)}><option value="">Choose a script run</option>{scripts.map((item) => <option key={item.id} value={item.id}>{item.filename} / {formatDate(item.created_at)}</option>)}</select>} />
-    {!selectedScript ? <EmptyState title="No script runs yet" detail="Run a Python file first, then its activity shows up here." action="Run Python file" onAction={onScriptLaunch} /> : <ScriptDetail script={selectedScript} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
+    {!selectedScript ? <EmptyState title="No script runs yet" detail="Write a script first, then its activity shows up here." action="New script" onAction={onScriptLaunch} /> : <ScriptDetail script={selectedScript} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
   </>
 }
 
 function BenchmarksView({ runs, trace, selectedRun, onLaunch, onSelectRun }) { const completed = runs.filter((run) => run.status === 'completed' && run.result); const latest = completed[0]; return <><PageHeader eyebrow="DEV TOOLS" title="Benchmarks" description="Built-in matrix calculation used to compare backends. Not part of the main workflow." action={<button className="primary-button" onClick={onLaunch}><span>+</span> Start benchmark</button>} />{latest ? <><div className="benchmark-layout"><section className="panel benchmark-card"><div className="eyebrow">MOST RECENT RESULT</div><h2>Matrix calculation</h2><p>{friendlyBackend(latest.request.backend)} / {latest.request.size} x {latest.request.size}</p><div className="benchmark-metrics"><Metric label="Time" value={formatDuration(latest.result.latency_seconds.median)} /><Metric label="Speed" value={`${latest.result.throughput_tflops.median.toFixed(3)} TFLOP/s`} /><Metric label="Result" value={latest.result.correctness_passed ? 'Good' : 'Check'} /></div><button className="secondary-button" onClick={() => onSelectRun(latest.id)}>See what happened <span>-&gt;</span></button></section><section className="panel benchmark-history"><div className="section-heading compact"><div><div className="eyebrow">HISTORY</div><h2>Previous results</h2></div><span className="chart-meta">{completed.length} results</span></div>{completed.slice(0, 8).map((run) => <button className="benchmark-session" key={run.id} onClick={() => onSelectRun(run.id)}><div><strong>{friendlyBackend(run.request.backend)} / Matrix calculation</strong><span>{run.request.size} x {run.request.size} / {formatDate(run.created_at)}</span></div><b>{formatDuration(run.result.latency_seconds.median)}</b><StatusBadge status={run.status} /></button>)}</section></div>{selectedRun && <section className="section-block"><div className="trace-toolbar"><div><span className="eyebrow">TRACE</span><strong>{selectedRun.id} / Matrix calculation / {friendlyBackend(selectedRun.request.backend)}</strong></div><span className="trace-context"><StatusBadge status={selectedRun.status} /></span></div><section className="panel trace-panel">{trace?.operations?.length ? trace.operations.map((operation) => <TraceRow key={operation.name} operation={operation} />) : <div className="empty-state">Operation details will appear when the run finishes.</div>}</section>{selectedRun.result && <div className="trace-footer"><div><span className="eyebrow">RESULT</span><strong>{selectedRun.result.correctness_passed ? 'Everything looks good' : 'Please check the result'}</strong><span>{selectedRun.request.size} x {selectedRun.request.size} calculation / {selectedRun.request.measured_iterations} checks</span></div><div className="selected-metrics"><Metric label="Time" value={formatDuration(selectedRun.result.latency_seconds?.median)} /><Metric label="Speed" value={selectedRun.result.throughput_tflops?.median != null ? `${selectedRun.result.throughput_tflops.median.toFixed(3)} TFLOP/s` : 'Unavailable'} /><Metric label="Memory" value={selectedRun.result.device.memory.estimated ? 'Estimated' : 'Measured'} /></div></div>}</section>}</> : <EmptyState title="No benchmark runs yet" detail="Start a matrix benchmark to compare how a backend handles the workload." action="Start benchmark" onAction={onLaunch} />}</> }
 
+const DEFAULT_SCRIPT = `import har
+import torch
+
+
+@har.offload
+def big_matmul(size: int) -> torch.Tensor:
+    left = torch.randn(size, size)
+    right = torch.randn(size, size)
+    return left @ right
+
+
+result = big_matmul(2048)
+print("result shape:", tuple(result.shape))
+`
+
 function ScriptLauncher({ nodes, onClose, onSubmit }) {
-  const [file, setFile] = useState(null)
+  const [filename, setFilename] = useState('untitled.py')
+  const [content, setContent] = useState(DEFAULT_SCRIPT)
   const [targetNode, setTargetNode] = useState('local')
   const [args, setArgs] = useState('')
   const [error, setError] = useState('')
-  const chooseFile = async (event) => {
+
+  const loadFile = async (event) => {
     const selected = event.target.files?.[0]
     if (!selected) return
-    if (!selected.name.toLowerCase().endsWith('.py')) { setError('Choose a Python file ending in .py.'); return }
-    setFile({ filename: selected.name, content: await selected.text() })
+    if (!selected.name.toLowerCase().endsWith('.py')) { setError('Load a .py file.'); return }
+    setFilename(selected.name)
+    setContent(await selected.text())
     setError('')
   }
-  const submit = async (event) => {
+
+  const handleEditorKey = (event) => {
+    if (event.key !== 'Tab') return
     event.preventDefault()
-    if (!file) { setError('Choose a Python file first.'); return }
-    try { await onSubmit({ ...file, target_node: targetNode, args: args.trim() ? args.trim().split(/\s+/) : [] }) } catch (submitError) { setError(submitError.message) }
+    const target = event.target
+    const start = target.selectionStart
+    const end = target.selectionEnd
+    const next = content.slice(0, start) + '    ' + content.slice(end)
+    setContent(next)
+    requestAnimationFrame(() => { target.selectionStart = target.selectionEnd = start + 4 })
   }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">NEW TASK</div><h2>Run a Python file</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>HAR copies the file to the selected computer and runs it in a temporary job folder.</p><label>Python file<input type="file" accept=".py,text/x-python" onChange={chooseFile} /></label>{file && <div className="selected-file"><span className="status-dot" />{file.filename}</div>}<label>Computer<select value={targetNode} onChange={(event) => setTargetNode(event.target.value)}><option value="local">This computer</option>{nodes.filter((node) => node.name !== 'This device').map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} / {node.status === 'online' ? 'ready' : 'not available'}</option>)}</select></label><label>Arguments <span className="optional">OPTIONAL</span><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" /></label><div className="advanced-note">The file runs with the Python packages already installed on that computer. No shell command is executed.</div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">Run file <span>-&gt;</span></button></div></form></div>
+
+  const submit = async (event) => {
+    event.preventDefault(); setError('')
+    const name = filename.trim() || 'untitled.py'
+    if (!name.toLowerCase().endsWith('.py')) { setError('Filename must end with .py.'); return }
+    if (!content.trim()) { setError('Write some code first.'); return }
+    try {
+      await onSubmit({ filename: name, content, target_node: targetNode, args: args.trim() ? args.trim().split(/\s+/) : [] })
+    } catch (submitError) { setError(submitError.message) }
+  }
+
+  const lineCount = content.split('\n').length
+  const remoteNodes = nodes.filter((node) => node.name !== 'This device')
+
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal editor-modal" onSubmit={submit}>
+    <div className="modal-header"><div><div className="eyebrow">NEW SCRIPT</div><h2>Write Python</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
+    <p>Type Python here (or load a .py file to seed it). HAR copies the code to the selected computer and runs it in a temporary job folder.</p>
+    <div className="editor-head">
+      <label className="editor-filename">Filename<input value={filename} onChange={(event) => setFilename(event.target.value)} /></label>
+      <label className="editor-load secondary-button" title="Load a .py file into the editor">Load file...<input type="file" accept=".py,text/x-python" onChange={loadFile} hidden /></label>
+    </div>
+    <label>Code <span className="editor-meta">{lineCount} line{lineCount === 1 ? '' : 's'} · {content.length} chars</span>
+      <textarea className="code-editor" value={content} onChange={(event) => setContent(event.target.value)} onKeyDown={handleEditorKey} spellCheck={false} rows={16} wrap="off" />
+    </label>
+    <label>Computer<select value={targetNode} onChange={(event) => setTargetNode(event.target.value)}><option value="local">This computer</option>{remoteNodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} {node.status === 'online' ? '' : '(not available)'}</option>)}</select></label>
+    <label>Arguments <span className="optional">OPTIONAL</span><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" /></label>
+    <div className="advanced-note">The script runs with the Python packages already installed on the selected computer. @har.offload-decorated functions get routed by HAR; everything else runs in-process as usual.</div>
+    {error && <div className="form-error">{error}</div>}
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">Run script <span>-&gt;</span></button></div>
+  </form></div>
 }
 
 function ConnectDevice({ onClose, onConnected }) {
