@@ -39,6 +39,55 @@ const formatDuration = (seconds) => {
 
 const formatDate = (value) => value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unavailable'
 
+function Dropdown({ value, onChange, options, placeholder = 'Choose...', disabled = false, ariaLabel }) {
+  const [open, setOpen] = useState(false)
+  const [focused, setFocused] = useState(-1)
+  const rootRef = useRef(null)
+  const current = options.find((option) => option.value === value)
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (event) => { if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [open])
+  const enabledIndices = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0)
+  const handleKey = (event) => {
+    if (disabled) return
+    if (!open && (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown')) { event.preventDefault(); setOpen(true); setFocused(enabledIndices[0] ?? -1); return }
+    if (!open) return
+    if (event.key === 'Escape') { event.preventDefault(); setOpen(false); return }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      const direction = event.key === 'ArrowDown' ? 1 : -1
+      const pos = enabledIndices.indexOf(focused)
+      const nextPos = pos === -1 ? 0 : (pos + direction + enabledIndices.length) % enabledIndices.length
+      setFocused(enabledIndices[nextPos])
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      const option = options[focused]
+      if (option && !option.disabled) { onChange(option.value); setOpen(false) }
+    }
+  }
+  return <div className={`dropdown ${disabled ? 'disabled' : ''} ${open ? 'open' : ''}`} ref={rootRef}>
+    <button type="button" className="dropdown-trigger" onClick={() => !disabled && setOpen((state) => !state)} onKeyDown={handleKey} disabled={disabled} aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel}>
+      <span className="dropdown-label">{current ? current.label : placeholder}</span>
+      <span className="dropdown-chevron" aria-hidden>v</span>
+    </button>
+    {open && <ul className="dropdown-menu" role="listbox">
+      {options.map((option, index) => <li key={option.value} role="option" aria-selected={option.value === value}>
+        <button type="button" className={`dropdown-option ${option.value === value ? 'selected' : ''} ${option.disabled ? 'disabled' : ''} ${index === focused ? 'focused' : ''}`} onClick={() => { if (option.disabled) return; onChange(option.value); setOpen(false) }} disabled={option.disabled} onMouseEnter={() => setFocused(index)}>
+          <span>{option.label}</span>
+          {option.hint && <span className="dropdown-hint">{option.hint}</span>}
+        </button>
+      </li>)}
+    </ul>}
+  </div>
+}
+
+function RefreshButton({ onClick, title = 'Refresh' }) {
+  return <button type="button" className="icon-button section-refresh" onClick={onClick} aria-label={title} title={title}>R</button>
+}
+
 function App() {
   const [runtimeSetup, setRuntimeSetup] = useState({ checking: true, installed: true, target: '', asset: '', error: '' })
   const [view, setView] = useState('runtime')
@@ -123,6 +172,23 @@ function App() {
     await loadRuntime()
   }
 
+  const disconnectNode = async (node) => {
+    const name = node?.name || node?.node_id
+    if (!node?.node_id) return
+    if (!window.confirm(`Disconnect ${name}? HAR will stop sending tasks to this device.`)) return
+    try {
+      const response = await fetch(`${API}/api/nodes/${encodeURIComponent(node.node_id)}`, { method: 'DELETE' })
+      if (!response.ok && response.status !== 404) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.detail || `HTTP ${response.status}`)
+      }
+      notify(`${name} disconnected.`)
+      await loadRuntime()
+    } catch (error) {
+      notify(`Could not disconnect: ${error.message}`)
+    }
+  }
+
   const launchScript = async (request) => {
     const response = await fetch(`${API}/api/scripts`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })
     const data = await response.json()
@@ -156,10 +222,10 @@ function App() {
       {runtimeSetup.update_available && <RuntimeUpdate status={runtimeSetup} onUpdated={(status) => { startedAt.current = Date.now(); connectedOnce.current = false; setRuntimeSetup({ ...status, checking: false, error: '' }); notify('Runtime updated.') }} />}
       {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>Make sure the HAR service is running, then try again.</span></div><button onClick={loadRuntime}>Try again</button></div>}
       {view === 'runtime' && <RuntimeView devices={runtime.devices} nodes={runtime.nodes} runs={runtime.runs} activeRun={activeRun} cpuInfo={cpuInfo} onLaunch={() => setShowLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
-      {view === 'workloads' && <WorkloadsView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} />}
-      {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onConnect={() => setShowConnect(true)} />}
-      {view === 'traces' && <TracesView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} />}
-      {view === 'benchmarks' && <BenchmarksView runs={runtime.runs} trace={trace} selectedRun={selectedRun} onLaunch={() => setShowLauncher(true)} onSelectRun={setSelectedRunId} />}
+      {view === 'workloads' && <WorkloadsView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
+      {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onConnect={() => setShowConnect(true)} onDisconnect={disconnectNode} onRefresh={loadRuntime} />}
+      {view === 'traces' && <TracesView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
+      {view === 'benchmarks' && <BenchmarksView runs={runtime.runs} trace={trace} selectedRun={selectedRun} onLaunch={() => setShowLauncher(true)} onSelectRun={setSelectedRunId} onRefresh={loadRuntime} />}
     </main>
     {showLauncher && <Launcher devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onClose={() => setShowLauncher(false)} onSubmit={launchRun} />}
     {showScriptLauncher && <ScriptLauncher nodes={runtime.nodes} onClose={() => setShowScriptLauncher(false)} onSubmit={launchScript} />}
@@ -270,7 +336,7 @@ function FabricSummary({ devices, nodes, cpuInfo, onOpen }) {
 }
 function DeviceSummary({ device, cpuInfo }) { const memory = device.memory; const label = device.backend === 'cpu' ? cpuLabel(device, cpuInfo) : device.device_name; return <div className="mini-device"><div className="mini-device-top"><BackendBadge backend={device.backend} /><span className="device-state online">online</span></div><strong>{label}</strong><div className="util-row"><span>{memory.measured ? 'Measured memory' : memory.estimated ? 'Estimated memory' : 'Memory unavailable'}</span><span>{formatBytes(memory.available_bytes)} free</span></div><div className="util-track"><div className={`backend-fill ${device.backend}`} style={{ width: memory.total_bytes && memory.available_bytes != null ? `${Math.min((memory.available_bytes / memory.total_bytes) * 100, 100)}%` : '0%' }} /></div></div> }
 
-function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo }) {
+function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo, onRefresh }) {
   const selectedScript = scripts.find((script) => script.id === selectedScriptId) || null
   return <>
     <PageHeader eyebrow="SCRIPTS" title="Run Python" description="Write a Python script, pick a device, see what it printed and whether it finished cleanly." action={<button className="primary-button" onClick={onScriptLaunch}><span>+</span> New script</button>} />
@@ -284,7 +350,7 @@ function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScriptLaun
     <section className="section-block">
       <div className="section-heading"><div><div className="eyebrow">SCRIPT HISTORY</div><h2>Your Python runs</h2></div>{scripts.length ? <span className="chart-meta">{scripts.length} run{scripts.length === 1 ? '' : 's'}</span> : null}</div>
       {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} nodes={nodes} active={script.id === selectedScriptId} onClick={() => onSelectScript(script.id === selectedScriptId ? null : script.id)} />)}</div> : <EmptyState title="No Python runs yet" detail="Write a script to see output and status here." action="New script" onAction={onScriptLaunch} />}
-      {selectedScript && <ScriptDetail script={selectedScript} onClose={() => onSelectScript(null)} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
+      {selectedScript && <ScriptDetail script={selectedScript} onClose={() => onSelectScript(null)} onRefresh={onRefresh} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
     </section>
   </>
 }
@@ -320,7 +386,7 @@ function RolePanel() {
   return <section className="role-panel panel"><div className="role-panel-head"><div><span className="eyebrow">THIS COMPUTER'S ROLE</span><p>{roleOptions.find((option) => option.id === role)?.detail}</p>{lanAddress && <p className="role-ip">This PC's address: <code>{lanAddress}</code> <button className="link-button" onClick={() => navigator.clipboard?.writeText(lanAddress)}>Copy</button></p>}</div><div className="role-options" role="radiogroup" aria-label="Runtime role">{roleOptions.map((option) => <button key={option.id} role="radio" aria-checked={role === option.id} className={`role-option ${role === option.id ? 'active' : ''}`} onClick={() => change(option.id)} disabled={switching}>{option.label}</button>)}</div></div>{role === 'worker' && <div className="role-address"><span>On the other computer, choose <strong>Add device</strong> and enter</span><code>{workerAddress || 'http://<this-computer-IP>:9000'}</code>{workerAddress && <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(workerAddress)}>Copy</button>}</div>}{error && <div className="form-error">{error}</div>}</section>
 }
 
-function FabricView({ devices, nodes, cpuInfo, onConnect }) {
+function FabricView({ devices, nodes, cpuInfo, onConnect, onDisconnect, onRefresh }) {
   const localAvailable = devices.filter((device) => device.available)
   const local = localAvailable.map((device) => ({ ...device, kind: 'ON THIS COMPUTER', state: 'online', name: deviceHeading(device, cpuInfo), detail: 'Ready to use' }))
   const remoteNodes = nodes.filter((node) => node.name !== 'This device')
@@ -329,18 +395,18 @@ function FabricView({ devices, nodes, cpuInfo, onConnect }) {
   const machineCount = (localAvailable.length ? 1 : 0) + remoteNodes.length
   const machinesReady = (localAvailable.length ? 1 : 0) + remoteNodes.filter((node) => node.status === 'online').length
   const runtimesReady = all.filter((device) => device.state === 'online').length
-  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button>} /><RolePanel /><div className="fabric-banner"><div><span className="status-dot" /><strong>{machinesReady} device{machinesReady === 1 ? '' : 's'} available</strong><span>{runtimesReady} runtime{runtimesReady === 1 ? '' : 's'} across {machineCount} machine{machineCount === 1 ? '' : 's'}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
+  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button></div>} /><RolePanel /><div className="fabric-banner"><div><span className="status-dot" /><strong>{machinesReady} device{machinesReady === 1 ? '' : 's'} available</strong><span>{runtimesReady} runtime{runtimesReady === 1 ? '' : 's'} across {machineCount} machine{machineCount === 1 ? '' : 's'}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} onDisconnect={onDisconnect} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
 }
 
-function TracesView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo }) {
+function TracesView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo, onRefresh }) {
   const selectedScript = scripts.find((script) => script.id === selectedScriptId) || scripts[0] || null
   return <>
-    <PageHeader eyebrow="SCRIPT ACTIVITY" title="Activity" description="See what each Python run did: where it ran, how long it took, and its output." action={<select className="trace-select" value={selectedScript?.id || ''} onChange={(event) => onSelectScript(event.target.value || null)}><option value="">Choose a script run</option>{scripts.map((item) => <option key={item.id} value={item.id}>{item.filename} / {formatDate(item.created_at)}</option>)}</select>} />
-    {!selectedScript ? <EmptyState title="No script runs yet" detail="Write a script first, then its activity shows up here." action="New script" onAction={onScriptLaunch} /> : <ScriptDetail script={selectedScript} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
+    <PageHeader eyebrow="SCRIPT ACTIVITY" title="Activity" description="See what each Python run did: where it ran, how long it took, and its output." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh" />}<Dropdown ariaLabel="Choose a script run" placeholder="Choose a script run" value={selectedScript?.id || ''} onChange={(next) => onSelectScript(next || null)} options={scripts.map((item) => ({ value: item.id, label: `${item.filename}  ·  ${formatDate(item.created_at)}` }))} /></div>} />
+    {!selectedScript ? <EmptyState title="No script runs yet" detail="Write a script first, then its activity shows up here." action="New script" onAction={onScriptLaunch} /> : <ScriptDetail script={selectedScript} onRefresh={onRefresh} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
   </>
 }
 
-function BenchmarksView({ runs, trace, selectedRun, onLaunch, onSelectRun }) { const completed = runs.filter((run) => run.status === 'completed' && run.result); const latest = completed[0]; return <><PageHeader eyebrow="DEV TOOLS" title="Benchmarks" description="Built-in matrix calculation used to compare backends. Not part of the main workflow." action={<button className="primary-button" onClick={onLaunch}><span>+</span> Start benchmark</button>} />{latest ? <><div className="benchmark-layout"><section className="panel benchmark-card"><div className="eyebrow">MOST RECENT RESULT</div><h2>Matrix calculation</h2><p>{friendlyBackend(latest.request.backend)} / {latest.request.size} x {latest.request.size}</p><div className="benchmark-metrics"><Metric label="Time" value={formatDuration(latest.result.latency_seconds.median)} /><Metric label="Speed" value={`${latest.result.throughput_tflops.median.toFixed(3)} TFLOP/s`} /><Metric label="Result" value={latest.result.correctness_passed ? 'Good' : 'Check'} /></div><button className="secondary-button" onClick={() => onSelectRun(latest.id)}>See what happened <span>-&gt;</span></button></section><section className="panel benchmark-history"><div className="section-heading compact"><div><div className="eyebrow">HISTORY</div><h2>Previous results</h2></div><span className="chart-meta">{completed.length} results</span></div>{completed.slice(0, 8).map((run) => <button className="benchmark-session" key={run.id} onClick={() => onSelectRun(run.id)}><div><strong>{friendlyBackend(run.request.backend)} / Matrix calculation</strong><span>{run.request.size} x {run.request.size} / {formatDate(run.created_at)}</span></div><b>{formatDuration(run.result.latency_seconds.median)}</b><StatusBadge status={run.status} /></button>)}</section></div>{selectedRun && <section className="section-block"><div className="trace-toolbar"><div><span className="eyebrow">TRACE</span><strong>{selectedRun.id} / Matrix calculation / {friendlyBackend(selectedRun.request.backend)}</strong></div><span className="trace-context"><StatusBadge status={selectedRun.status} /></span></div><section className="panel trace-panel">{trace?.operations?.length ? trace.operations.map((operation) => <TraceRow key={operation.name} operation={operation} />) : <div className="empty-state">Operation details will appear when the run finishes.</div>}</section>{selectedRun.result && <div className="trace-footer"><div><span className="eyebrow">RESULT</span><strong>{selectedRun.result.correctness_passed ? 'Everything looks good' : 'Please check the result'}</strong><span>{selectedRun.request.size} x {selectedRun.request.size} calculation / {selectedRun.request.measured_iterations} checks</span></div><div className="selected-metrics"><Metric label="Time" value={formatDuration(selectedRun.result.latency_seconds?.median)} /><Metric label="Speed" value={selectedRun.result.throughput_tflops?.median != null ? `${selectedRun.result.throughput_tflops.median.toFixed(3)} TFLOP/s` : 'Unavailable'} /><Metric label="Memory" value={selectedRun.result.device.memory.estimated ? 'Estimated' : 'Measured'} /></div></div>}</section>}</> : <EmptyState title="No benchmark runs yet" detail="Start a matrix benchmark to compare how a backend handles the workload." action="Start benchmark" onAction={onLaunch} />}</> }
+function BenchmarksView({ runs, trace, selectedRun, onLaunch, onSelectRun, onRefresh }) { const completed = runs.filter((run) => run.status === 'completed' && run.result); const latest = completed[0]; return <><PageHeader eyebrow="DEV TOOLS" title="Benchmarks" description="Built-in matrix calculation used to compare backends. Not part of the main workflow." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh benchmarks" />}<button className="primary-button" onClick={onLaunch}><span>+</span> Start benchmark</button></div>} />{latest ? <><div className="benchmark-layout"><section className="panel benchmark-card"><div className="eyebrow">MOST RECENT RESULT</div><h2>Matrix calculation</h2><p>{friendlyBackend(latest.request.backend)} / {latest.request.size} x {latest.request.size}</p><div className="benchmark-metrics"><Metric label="Time" value={formatDuration(latest.result.latency_seconds.median)} /><Metric label="Speed" value={`${latest.result.throughput_tflops.median.toFixed(3)} TFLOP/s`} /><Metric label="Result" value={latest.result.correctness_passed ? 'Good' : 'Check'} /></div><button className="secondary-button" onClick={() => onSelectRun(latest.id)}>See what happened <span>-&gt;</span></button></section><section className="panel benchmark-history"><div className="section-heading compact"><div><div className="eyebrow">HISTORY</div><h2>Previous results</h2></div><span className="chart-meta">{completed.length} results</span></div>{completed.slice(0, 8).map((run) => <button className="benchmark-session" key={run.id} onClick={() => onSelectRun(run.id)}><div><strong>{friendlyBackend(run.request.backend)} / Matrix calculation</strong><span>{run.request.size} x {run.request.size} / {formatDate(run.created_at)}</span></div><b>{formatDuration(run.result.latency_seconds.median)}</b><StatusBadge status={run.status} /></button>)}</section></div>{selectedRun && <section className="section-block"><div className="trace-toolbar"><div><span className="eyebrow">TRACE</span><strong>{selectedRun.id} / Matrix calculation / {friendlyBackend(selectedRun.request.backend)}</strong></div><span className="trace-context"><StatusBadge status={selectedRun.status} /></span></div><section className="panel trace-panel">{trace?.operations?.length ? trace.operations.map((operation) => <TraceRow key={operation.name} operation={operation} />) : <div className="empty-state">Operation details will appear when the run finishes.</div>}</section>{selectedRun.result && <div className="trace-footer"><div><span className="eyebrow">RESULT</span><strong>{selectedRun.result.correctness_passed ? 'Everything looks good' : 'Please check the result'}</strong><span>{selectedRun.request.size} x {selectedRun.request.size} calculation / {selectedRun.request.measured_iterations} checks</span></div><div className="selected-metrics"><Metric label="Time" value={formatDuration(selectedRun.result.latency_seconds?.median)} /><Metric label="Speed" value={selectedRun.result.throughput_tflops?.median != null ? `${selectedRun.result.throughput_tflops.median.toFixed(3)} TFLOP/s` : 'Unavailable'} /><Metric label="Memory" value={selectedRun.result.device.memory.estimated ? 'Estimated' : 'Measured'} /></div></div>}</section>}</> : <EmptyState title="No benchmark runs yet" detail="Start a matrix benchmark to compare how a backend handles the workload." action="Start benchmark" onAction={onLaunch} />}</> }
 
 const DEFAULT_SCRIPT = `import har
 import torch
@@ -404,7 +470,7 @@ function ScriptLauncher({ nodes, onClose, onSubmit }) {
         basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: false, autocompletion: true, bracketMatching: true, indentOnInput: true, highlightSelectionMatches: true }}
       />
     </div>
-    <label>Computer<select value={targetNode} onChange={(event) => setTargetNode(event.target.value)}><option value="local">This computer</option>{remoteNodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} {node.status === 'online' ? '' : '(not available)'}</option>)}</select></label>
+    <label>Computer<Dropdown ariaLabel="Target computer" value={targetNode} onChange={setTargetNode} options={[{ value: 'local', label: 'This computer' }, ...remoteNodes.map((node) => ({ value: node.node_id, label: node.name, disabled: node.status !== 'online', hint: node.status === 'online' ? null : 'not available' }))]} /></label>
     <label>Arguments <span className="optional">OPTIONAL</span><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" /></label>
     <div className="advanced-note">The script runs with the Python packages already installed on the selected computer. @har.offload-decorated functions get routed by HAR; everything else runs in-process as usual.</div>
     {error && <div className="form-error">{error}</div>}
@@ -499,9 +565,9 @@ function Launcher({ devices, nodes, cpuInfo, onClose, onSubmit }) {
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}>
     <div className="modal-header"><div><div className="eyebrow">NEW TASK</div><h2>Start a calculation</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
     <p>Choose how much work to do and which device should handle it.</p>
-    <label>Computer<select value={targetNode} onChange={(event) => setTargetNode(event.target.value)}><option value="local">This computer</option>{remoteNodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} {node.status === 'online' ? '' : '(not available)'}</option>)}</select></label>
-    <label>Processing device<select value={form.backend} onChange={update('backend')} disabled={!availableBackends.length}>{availableBackends.length ? availableBackends.map((backend) => <option key={backend.backend} value={backend.backend}>{backendLabel(backend)}</option>) : <option value="">No devices on this computer</option>}</select></label>
-    <label>Amount of work<select value={form.size} onChange={update('size')}><option value="512">Small</option><option value="1024">Medium</option><option value="2048">Large</option></select></label>
+    <label>Computer<Dropdown ariaLabel="Target computer" value={targetNode} onChange={setTargetNode} options={[{ value: 'local', label: 'This computer' }, ...remoteNodes.map((node) => ({ value: node.node_id, label: node.name, disabled: node.status !== 'online', hint: node.status === 'online' ? null : 'not available' }))]} /></label>
+    <label>Processing device<Dropdown ariaLabel="Processing device" disabled={!availableBackends.length} value={form.backend} onChange={(next) => setForm((current) => ({ ...current, backend: next }))} placeholder="No devices on this computer" options={availableBackends.map((backend) => ({ value: backend.backend, label: backendLabel(backend) }))} /></label>
+    <label>Amount of work<Dropdown ariaLabel="Amount of work" value={String(form.size)} onChange={(next) => setForm((current) => ({ ...current, size: next }))} options={[{ value: '512', label: 'Small' }, { value: '1024', label: 'Medium' }, { value: '2048', label: 'Large' }]} /></label>
     <div className="advanced-note">HAR will choose the safe measurement settings automatically.</div>
     {submitError && <div className="form-error">{submitError}</div>}
     <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={!availableBackends.length}>Start task <span>-&gt;</span></button></div>
@@ -567,14 +633,14 @@ function backendLineLabel(backend, cpuInfo) {
   if (backend?.backend === 'cpu') return cpuLabel(backend, cpuInfo)
   return backend?.device_name || friendlyBackend(backend?.backend)
 }
-function ScriptDetail({ script, onClose, devices, nodes, cpuInfo }) {
+function ScriptDetail({ script, onClose, onRefresh, devices, nodes, cpuInfo }) {
   const elapsed = scriptElapsed(script)
   const hasOutput = Boolean(script.output && script.output.length)
   const machine = targetMachine(script, devices, nodes)
   const isLocal = script.target_node === 'local'
   const machineCpuInfo = isLocal ? cpuInfo : null
   return <section className="panel script-detail">
-    <div className="section-heading compact"><div><div className="eyebrow">SCRIPT DETAIL</div><h2>{script.filename}</h2></div><div className="script-detail-actions"><StatusBadge status={script.status} />{onClose && <button type="button" className="close-button" onClick={onClose} aria-label="Close script detail">X</button>}</div></div>
+    <div className="section-heading compact"><div><div className="eyebrow">SCRIPT DETAIL</div><h2>{script.filename}</h2></div><div className="script-detail-actions"><StatusBadge status={script.status} />{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh this script" />}{onClose && <button type="button" className="close-button" onClick={onClose} aria-label="Close script detail">X</button>}</div></div>
     <div className="placement-grid">
       <Placement label="Machine" value={machine?.name || '-'} />
       <Placement label="Started" value={formatDate(script.created_at)} />
@@ -592,7 +658,18 @@ function ScriptDetail({ script, onClose, devices, nodes, cpuInfo }) {
     <pre className="script-output">{hasOutput ? script.output : (script.status === 'running' ? 'Waiting for the script to finish. Output will appear here when it exits.' : (script.status === 'failed' ? (script.error || 'Script failed with no output.') : 'No output.'))}</pre>
   </section>
 }
-function DeviceCard({ device }) { const memory = device.memory || {}; return <article className={`panel device-card-large ${device.state}`}><div className="device-card-head"><div><BackendBadge backend={device.backend} /><span className="device-kind">{device.kind}</span></div><StatusBadge status={device.state} /></div><h2>{device.name}</h2><p>{device.detail}</p><div className="device-metrics"><Metric label="Status" value={device.available === false ? 'Not ready' : 'Ready'} /><Metric label="Free space" value={formatBytes(memory.available_bytes)} /></div><div className="util-track large"><div className={`backend-fill ${device.backend}`} style={{ width: memory.total_bytes && memory.available_bytes != null ? `${Math.min((memory.available_bytes / memory.total_bytes) * 100, 100)}%` : '0%' }} /></div><div className="device-workload"><span>SPACE INFORMATION</span><strong>{memory.estimated ? 'Estimated' : memory.measured ? 'Measured' : 'Not available'}</strong></div></article> }
+function DeviceCard({ device, onDisconnect }) {
+  const memory = device.memory || {}
+  const isRemote = typeof device.kind === 'string' && device.kind.startsWith('OTHER COMPUTER') && device.node_id
+  return <article className={`panel device-card-large ${device.state}`}>
+    <div className="device-card-head"><div><BackendBadge backend={device.backend} /><span className="device-kind">{device.kind}</span></div><div className="device-card-actions"><StatusBadge status={device.state} />{isRemote && onDisconnect && <button type="button" className="secondary-button device-disconnect" onClick={() => onDisconnect({ node_id: device.node_id, name: device.kind?.split('/').pop()?.trim() || device.node_id })}>Disconnect</button>}</div></div>
+    <h2>{device.name}</h2>
+    <p>{device.detail}</p>
+    <div className="device-metrics"><Metric label="Status" value={device.available === false ? 'Not ready' : 'Ready'} /><Metric label="Free space" value={formatBytes(memory.available_bytes)} /></div>
+    <div className="util-track large"><div className={`backend-fill ${device.backend}`} style={{ width: memory.total_bytes && memory.available_bytes != null ? `${Math.min((memory.available_bytes / memory.total_bytes) * 100, 100)}%` : '0%' }} /></div>
+    <div className="device-workload"><span>SPACE INFORMATION</span><strong>{memory.estimated ? 'Estimated' : memory.measured ? 'Measured' : 'Not available'}</strong></div>
+  </article>
+}
 function TraceRow({ operation }) { return <div className="trace-row"><div className="trace-label"><span className={`trace-dot ${operation.backend}`} /><div><strong>{operation.name}</strong><span>{operation.type}</span></div></div><div className="trace-lane"><div className={`trace-bar ${operation.backend}`} style={{ width: operation.duration_seconds ? '100%' : '40%' }}><span>{operation.backend.toUpperCase()}</span></div></div><div className="trace-value"><strong>{formatDuration(operation.duration_seconds)}</strong><span>{operation.measured ? 'Measured' : 'Unavailable'}</span></div></div> }
 function Placement({ label, value, accent }) { return <div><span>{label}</span><strong className={accent || ''}>{value}</strong></div> }
 function Metric({ label, value }) { return <div className="small-metric"><span>{label}</span><strong>{value}</strong></div> }

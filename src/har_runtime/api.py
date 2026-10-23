@@ -451,6 +451,20 @@ def nodes() -> list[dict[str, Any]]:
     return list(_nodes.values())
 
 
+@app.delete("/api/nodes/{node_id}")
+def disconnect_node(node_id: str) -> dict[str, str]:
+    """Remove a node from this host's roster.
+
+    Workers are not told; their trust state belongs to the worker's own pairing flow.
+    After this call, the UI stops offering the node as a target until it registers again.
+    """
+
+    removed = _nodes.pop(node_id, None)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Node is not registered")
+    return {"status": "disconnected", "node_id": node_id}
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "hardware-aware-ai-runtime"}

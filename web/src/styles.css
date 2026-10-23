@@ -118,3 +118,29 @@ button { cursor: pointer; }
 .discovered-row strong { color: #dbe4e6; font-size: 12px; }
 .discovered-row span { color: var(--muted); font: 10px 'DM Mono'; overflow-wrap: anywhere; }
 .discovered-row .secondary-button { flex: 0 0 auto; }
+
+/* Themed Dropdown — replaces native <select> across modals and views. */
+.dropdown { position: relative; display: block; width: 100%; margin-top: 8px; }
+.dropdown.disabled { opacity: .55; }
+.dropdown-trigger { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; border: 1px solid var(--border-strong); color: #e6edef; background: #0b0f12; font: 12px 'DM Mono'; text-align: left; cursor: pointer; }
+.dropdown-trigger:disabled { cursor: not-allowed; }
+.dropdown-trigger:hover:not(:disabled), .dropdown.open .dropdown-trigger { border-color: var(--lime); }
+.dropdown-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dropdown-chevron { flex: 0 0 auto; color: var(--lime); font: 10px 'DM Mono'; transition: transform .15s ease; }
+.dropdown.open .dropdown-chevron { transform: rotate(180deg); }
+.dropdown-menu { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; right: 0; max-height: 260px; margin: 0; padding: 4px; list-style: none; overflow: auto; border: 1px solid var(--border-strong); background: #0b0f12; box-shadow: 0 12px 36px rgba(0, 0, 0, .55); }
+.dropdown-menu li { list-style: none; }
+.dropdown-option { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 11px; border: 0; color: #c9d4d9; background: transparent; font: 11px 'DM Mono'; text-align: left; cursor: pointer; }
+.dropdown-option:hover:not(.disabled), .dropdown-option.focused:not(.disabled) { color: var(--lime); background: #152018; }
+.dropdown-option.selected { color: var(--lime); background: #182218; }
+.dropdown-option.disabled { color: #4a5560; cursor: not-allowed; }
+.dropdown-hint { color: #5e6b76; font: 9px 'DM Mono'; }
+.launcher-modal .dropdown { margin-top: 8px; }
+
+/* Section refresh button — slightly softer than the top-bar reload. */
+.section-refresh { border-color: var(--border); color: #7f8c96; }
+.section-refresh:hover { color: var(--lime); border-color: var(--lime); }
+
+.device-card-actions { display: flex; align-items: center; gap: 8px; }
+.device-disconnect { padding: 7px 11px; font: 9px 'DM Mono'; }
+.device-disconnect:hover { color: var(--red); border-color: #633c32; }
