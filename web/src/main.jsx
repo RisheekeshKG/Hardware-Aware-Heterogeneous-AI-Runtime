@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import CodeMirror from '@uiw/react-codemirror'
+import { python } from '@codemirror/lang-python'
+import { oneDark } from '@codemirror/theme-one-dark'
 import './styles.css'
 
 const API = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
@@ -370,17 +373,6 @@ function ScriptLauncher({ nodes, onClose, onSubmit }) {
     setError('')
   }
 
-  const handleEditorKey = (event) => {
-    if (event.key !== 'Tab') return
-    event.preventDefault()
-    const target = event.target
-    const start = target.selectionStart
-    const end = target.selectionEnd
-    const next = content.slice(0, start) + '    ' + content.slice(end)
-    setContent(next)
-    requestAnimationFrame(() => { target.selectionStart = target.selectionEnd = start + 4 })
-  }
-
   const submit = async (event) => {
     event.preventDefault(); setError('')
     const name = filename.trim() || 'untitled.py'
@@ -401,9 +393,17 @@ function ScriptLauncher({ nodes, onClose, onSubmit }) {
       <label className="editor-filename">Filename<input value={filename} onChange={(event) => setFilename(event.target.value)} /></label>
       <label className="editor-load secondary-button" title="Load a .py file into the editor">Load file...<input type="file" accept=".py,text/x-python" onChange={loadFile} hidden /></label>
     </div>
-    <label>Code <span className="editor-meta">{lineCount} line{lineCount === 1 ? '' : 's'} · {content.length} chars</span>
-      <textarea className="code-editor" value={content} onChange={(event) => setContent(event.target.value)} onKeyDown={handleEditorKey} spellCheck={false} rows={16} wrap="off" />
-    </label>
+    <label>Code <span className="editor-meta">{lineCount} line{lineCount === 1 ? '' : 's'} · {content.length} chars</span></label>
+    <div className="code-editor-wrap">
+      <CodeMirror
+        value={content}
+        height="380px"
+        theme={oneDark}
+        extensions={[python()]}
+        onChange={(value) => setContent(value)}
+        basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: false, autocompletion: true, bracketMatching: true, indentOnInput: true, highlightSelectionMatches: true }}
+      />
+    </div>
     <label>Computer<select value={targetNode} onChange={(event) => setTargetNode(event.target.value)}><option value="local">This computer</option>{remoteNodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} {node.status === 'online' ? '' : '(not available)'}</option>)}</select></label>
     <label>Arguments <span className="optional">OPTIONAL</span><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" /></label>
     <div className="advanced-note">The script runs with the Python packages already installed on the selected computer. @har.offload-decorated functions get routed by HAR; everything else runs in-process as usual.</div>

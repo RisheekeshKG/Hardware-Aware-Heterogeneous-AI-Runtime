@@ -96,5 +96,10 @@ button { cursor: pointer; }
 .editor-filename { flex: 1; margin: 0; }
 .editor-load { align-self: flex-end; margin-bottom: 0; padding: 10px 14px; cursor: pointer; }
 .editor-meta { margin-left: 10px; color: var(--muted); font: 9px 'DM Mono'; text-transform: none; letter-spacing: 0; }
-.code-editor { width: 100%; display: block; margin-top: 8px; padding: 14px 16px; border: 1px solid var(--border-strong); outline: none; color: #e6edef; background: #080b0e; font: 12px/1.55 'DM Mono', ui-monospace, monospace; resize: vertical; min-height: 320px; white-space: pre; overflow: auto; tab-size: 4; -moz-tab-size: 4; }
-.code-editor:focus { border-color: var(--lime); }
+.code-editor-wrap { margin-top: 8px; border: 1px solid var(--border-strong); overflow: hidden; background: #0b1016; }
+.code-editor-wrap:focus-within { border-color: var(--lime); }
+.code-editor-wrap .cm-editor { font: 12px/1.55 'DM Mono', ui-monospace, monospace; background: transparent; }
+.code-editor-wrap .cm-editor.cm-focused { outline: none; }
+.code-editor-wrap .cm-scroller { font-family: inherit; }
+.code-editor-wrap .cm-gutters { background: #0a0d12; border-right: 1px solid var(--border); color: #4a5560; }
+.code-editor-wrap .cm-activeLineGutter, .code-editor-wrap .cm-activeLine { background: rgba(217, 255, 114, .05); }
