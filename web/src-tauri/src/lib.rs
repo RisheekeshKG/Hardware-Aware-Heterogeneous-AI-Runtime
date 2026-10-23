@@ -108,6 +108,9 @@ fn runtime_asset_name(target: &str) -> String {
 const RUNTIME_VERSION_FILE: &str = ".har-runtime-version";
 
 static INSTALLING: AtomicBool = AtomicBool::new(false);
+// Serializes set_runtime_role so two in-flight calls can't both drain stop_services and
+// double-spawn (which left orphan runtimes bound to 8000/9000 in testing).
+static ROLE_SWITCH: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize)]
 struct RuntimeStatus {
@@ -828,6 +831,9 @@ fn cpu_info() -> CpuInfo {
     }
     #[cfg(target_os = "windows")]
     {
+        // Windows 11 24H2 removed wmic by default, so a plain wmic call silently returns
+        // nothing on newer installs. Try wmic first for compatibility, then PowerShell's
+        // Get-CimInstance which is available everywhere wmic used to be.
         if let Ok(output) = Command::new("wmic")
             .args(["cpu", "get", "Name,MaxClockSpeed", "/format:value"])
             .output()
@@ -843,6 +849,35 @@ fn cpu_info() -> CpuInfo {
                     if let Ok(mhz) = value.parse::<f64>() {
                         if mhz > 0.0 {
                             frequency_ghz = Some(mhz / 1000.0);
+                        }
+                    }
+                }
+            }
+        }
+        if brand.is_none() || frequency_ghz.is_none() {
+            if let Ok(output) = Command::new("powershell")
+                .args([
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name; (Get-CimInstance Win32_Processor | Select-Object -First 1).MaxClockSpeed",
+                ])
+                .output()
+            {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+                if brand.is_none() {
+                    if let Some(first) = lines.first() {
+                        if !first.is_empty() {
+                            brand = Some(first.to_string());
+                        }
+                    }
+                }
+                if frequency_ghz.is_none() {
+                    if let Some(second) = lines.get(1) {
+                        if let Ok(mhz) = second.parse::<f64>() {
+                            if mhz > 0.0 {
+                                frequency_ghz = Some(mhz / 1000.0);
+                            }
                         }
                     }
                 }
@@ -869,6 +904,7 @@ async fn set_runtime_role(app: AppHandle, role: String) -> Result<String, String
     std::fs::write(config_dir.join("role"), format!("{role}\n"))
         .map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
+        let _guard = ROLE_SWITCH.lock().map_err(|error| error.to_string())?;
         stop_services(&app);
         let children = spawn_services(&app, &runtime, &role)?;
         let state = app.state::<RuntimeProcesses>();

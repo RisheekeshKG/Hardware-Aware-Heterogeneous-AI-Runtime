@@ -457,8 +457,8 @@ def nodes() -> list[dict[str, Any]]:
 
 
 @app.delete("/api/nodes/{node_id}")
-def disconnect_node(node_id: str) -> dict[str, str]:
-    """Remove a node from this host's roster.
+def disconnect_node(node_id: str) -> dict[str, Any]:
+    """Remove a node from this host's roster and fail anything still running against it.
 
     Workers are not told; their trust state belongs to the worker's own pairing flow.
     After this call, the UI stops offering the node as a target until it registers again.
@@ -468,7 +468,30 @@ def disconnect_node(node_id: str) -> dict[str, str]:
     if removed is None:
         raise HTTPException(status_code=404, detail="Node is not registered")
     _disconnected_nodes.add(node_id)
-    return {"status": "disconnected", "node_id": node_id}
+
+    now = datetime.now(timezone.utc).isoformat()
+    aborted_runs: list[str] = []
+    for run in _runs.values():
+        if run.node_id == node_id and run.status in {"queued", "running"}:
+            run.status = "failed"
+            run.error = "Remote device was disconnected while this run was in flight"
+            run.updated_at = now
+            aborted_runs.append(run.id)
+    aborted_scripts: list[str] = []
+    for script in _script_runs.values():
+        if script.request.target_node == node_id and script.status in {"queued", "running"}:
+            script.status = "failed"
+            script.error = "Remote device was disconnected while this script was running"
+            script.updated_at = now
+            if script.finished_at is None:
+                script.finished_at = now
+            aborted_scripts.append(script.id)
+    return {
+        "status": "disconnected",
+        "node_id": node_id,
+        "aborted_runs": aborted_runs,
+        "aborted_scripts": aborted_scripts,
+    }
 
 
 @app.get("/api/health")
@@ -679,7 +702,14 @@ def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
 
 @app.get("/api/discovery")
 def discovery() -> list[dict[str, Any]]:
-    return _discovery_registry().list_nodes()
+    """Workers broadcasting on the LAN, minus any already connected to this host.
+
+    Without this filter the UI would list a worker you just paired with and keep offering
+    a Connect button that would re-run the pairing flow pointlessly.
+    """
+
+    connected_ids = set(_nodes.keys())
+    return [node for node in _discovery_registry().list_nodes() if node.get("node_id") not in connected_ids]
 
 
 @app.post("/api/discovery/connect")
@@ -759,14 +789,20 @@ def start_script(request: ScriptRunRequest) -> dict[str, Any]:
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
+    # Validate the target *before* creating the record so a 400 can't leave an orphan
+    # queued row sitting in _script_runs forever (observed: GET /api/scripts kept
+    # showing a never-progressing "queued" entry for a since-offline worker).
+    node = None
+    if request.target_node != "local":
+        node = _nodes.get(request.target_node)
+        if not node or node.get("status") != "online":
+            raise HTTPException(status_code=400, detail=f"Device '{request.target_node}' is not online")
+
     record = ScriptRecord(request)
     _script_runs[record.id] = record
     if request.target_node == "local":
         _executor.submit(_run_script_in_process, record)
     else:
-        node = _nodes.get(request.target_node)
-        if not node or node.get("status") != "online":
-            raise HTTPException(status_code=400, detail=f"Device '{request.target_node}' is not online")
         _executor.submit(_run_remote_script, record, node)
     return record.snapshot()
 

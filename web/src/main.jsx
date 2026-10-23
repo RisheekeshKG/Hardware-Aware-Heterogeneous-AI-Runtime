@@ -50,6 +50,11 @@ function Dropdown({ value, onChange, options, placeholder = 'Choose...', disable
     document.addEventListener('mousedown', close)
     return () => document.removeEventListener('mousedown', close)
   }, [open])
+  // Clamp focused index when the options array shrinks underneath us, so Enter can't
+  // trigger a now-removed item and ArrowDown/Up still land on something real.
+  useEffect(() => {
+    if (focused >= options.length || (focused >= 0 && options[focused]?.disabled)) setFocused(-1)
+  }, [options, focused])
   const enabledIndices = options.map((option, index) => option.disabled ? -1 : index).filter((index) => index >= 0)
   const handleKey = (event) => {
     if (disabled) return
@@ -650,16 +655,17 @@ function scriptTimings(script) {
   const finished = parse(script.finished_at)
   const updated = parse(script.updated_at)
   const toSec = (ms) => (Number.isFinite(ms) && ms >= 0 ? ms / 1000 : null)
-  const total = toSec((finished || updated || 0) - (created || 0))
-  const queue = toSec((started || finished || updated || 0) - (created || 0))
+  const diff = (end, start) => (end != null && start != null ? toSec(end - start) : null)
+  const total = diff(finished ?? updated, created)
+  const queue = diff(started ?? finished ?? updated, created)
   const execute = script.remote_execute_seconds != null
     ? script.remote_execute_seconds
-    : toSec((finished || updated || 0) - (started || 0))
-  const transport = total != null && execute != null && queue != null
+    : (started != null ? diff(finished ?? updated, started) : null)
+  const isRemote = Boolean(script.target_node && script.target_node !== 'local')
+  const transport = isRemote && total != null && execute != null && queue != null
     ? Math.max(total - execute - queue, 0)
-    : null
-  const isRemote = script.target_node && script.target_node !== 'local'
-  return { total, queue, execute, transport: isRemote ? transport : 0, isRemote }
+    : (isRemote ? null : 0)
+  return { total, queue, execute, transport, isRemote }
 }
 function formatSecondsShort(seconds) {
   if (seconds == null) return '-'
