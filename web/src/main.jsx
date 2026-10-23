@@ -104,6 +104,7 @@ function App() {
   const [showConnect, setShowConnect] = useState(false)
   const [toast, setToast] = useState('')
   const [pairing, setPairing] = useState([])
+  const [trustedHosts, setTrustedHosts] = useState([])
   const connectedOnce = useRef(false)
   const startedAt = useRef(Date.now())
 
@@ -126,6 +127,7 @@ function App() {
       const data = await runtimeResponse.json()
       setScripts(await scriptsResponse.json())
       fetch(`${API}/api/pairing`).then((response) => response.ok ? response.json() : []).then(setPairing).catch(() => setPairing([]))
+      fetch(`${API}/api/trusted-hosts`).then((response) => response.ok ? response.json() : []).then(setTrustedHosts).catch(() => setTrustedHosts([]))
       setRuntime(data)
       setError('')
       connectedOnce.current = true
@@ -223,7 +225,7 @@ function App() {
       {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>Make sure the HAR service is running, then try again.</span></div><button onClick={loadRuntime}>Try again</button></div>}
       {view === 'runtime' && <RuntimeView devices={runtime.devices} nodes={runtime.nodes} runs={runtime.runs} activeRun={activeRun} cpuInfo={cpuInfo} onLaunch={() => setShowLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
       {view === 'workloads' && <WorkloadsView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
-      {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onConnect={() => setShowConnect(true)} onDisconnect={disconnectNode} onRefresh={loadRuntime} />}
+      {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} trustedHosts={trustedHosts} onConnect={() => setShowConnect(true)} onDisconnect={disconnectNode} onRefresh={loadRuntime} onRevokeTrustedHost={async (ip) => { if (!window.confirm(`Revoke trust for ${ip}? HAR will refuse future jobs from this host.`)) return; try { const r = await fetch(`${API}/api/trusted-hosts/${encodeURIComponent(ip)}`, { method: 'DELETE' }); if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${r.status}`) } notify(`${ip} is no longer trusted.`); await loadRuntime() } catch (e) { notify(`Could not revoke: ${e.message}`) } }} />}
       {view === 'traces' && <TracesView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
       {view === 'benchmarks' && <BenchmarksView runs={runtime.runs} trace={trace} selectedRun={selectedRun} onLaunch={() => setShowLauncher(true)} onSelectRun={setSelectedRunId} onRefresh={loadRuntime} />}
     </main>
@@ -386,7 +388,7 @@ function RolePanel() {
   return <section className="role-panel panel"><div className="role-panel-head"><div><span className="eyebrow">THIS COMPUTER'S ROLE</span><p>{roleOptions.find((option) => option.id === role)?.detail}</p>{lanAddress && <p className="role-ip">This PC's address: <code>{lanAddress}</code> <button className="link-button" onClick={() => navigator.clipboard?.writeText(lanAddress)}>Copy</button></p>}</div><div className="role-options" role="radiogroup" aria-label="Runtime role">{roleOptions.map((option) => <button key={option.id} role="radio" aria-checked={role === option.id} className={`role-option ${role === option.id ? 'active' : ''}`} onClick={() => change(option.id)} disabled={switching}>{option.label}</button>)}</div></div>{role === 'worker' && <div className="role-address"><span>On the other computer, choose <strong>Add device</strong> and enter</span><code>{workerAddress || 'http://<this-computer-IP>:9000'}</code>{workerAddress && <button className="secondary-button" onClick={() => navigator.clipboard?.writeText(workerAddress)}>Copy</button>}</div>}{error && <div className="form-error">{error}</div>}</section>
 }
 
-function FabricView({ devices, nodes, cpuInfo, onConnect, onDisconnect, onRefresh }) {
+function FabricView({ devices, nodes, cpuInfo, trustedHosts, onConnect, onDisconnect, onRefresh, onRevokeTrustedHost }) {
   const localAvailable = devices.filter((device) => device.available)
   const local = localAvailable.map((device) => ({ ...device, kind: 'ON THIS COMPUTER', state: 'online', name: deviceHeading(device, cpuInfo), detail: 'Ready to use' }))
   const remoteNodes = nodes.filter((node) => node.name !== 'This device')
@@ -395,7 +397,24 @@ function FabricView({ devices, nodes, cpuInfo, onConnect, onDisconnect, onRefres
   const machineCount = (localAvailable.length ? 1 : 0) + remoteNodes.length
   const machinesReady = (localAvailable.length ? 1 : 0) + remoteNodes.filter((node) => node.status === 'online').length
   const runtimesReady = all.filter((device) => device.state === 'online').length
-  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button></div>} /><RolePanel /><div className="fabric-banner"><div><span className="status-dot" /><strong>{machinesReady} device{machinesReady === 1 ? '' : 's'} available</strong><span>{runtimesReady} runtime{runtimesReady === 1 ? '' : 's'} across {machineCount} machine{machineCount === 1 ? '' : 's'}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} onDisconnect={onDisconnect} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
+  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button></div>} /><RolePanel /><TrustedHostsPanel hosts={trustedHosts} onRevoke={onRevokeTrustedHost} /><div className="fabric-banner"><div><span className="status-dot" /><strong>{machinesReady} device{machinesReady === 1 ? '' : 's'} available</strong><span>{runtimesReady} runtime{runtimesReady === 1 ? '' : 's'} across {machineCount} machine{machineCount === 1 ? '' : 's'}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} onDisconnect={onDisconnect} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
+}
+
+function TrustedHostsPanel({ hosts, onRevoke }) {
+  if (!hosts || hosts.length === 0) return null
+  return <section className="panel trusted-hosts-panel">
+    <div className="section-heading compact">
+      <div><div className="eyebrow">HOSTS CONNECTED TO THIS COMPUTER</div><h2>{hosts.length} host{hosts.length === 1 ? '' : 's'} can send tasks here</h2></div>
+      <span className="eyebrow trusted-hosts-warn">AUDIT REGULARLY</span>
+    </div>
+    <p className="empty-copy">Each host below has previously been accepted and can run Python and benchmarks on this computer. Revoke any you don't recognize.</p>
+    <div className="trusted-hosts-list">
+      {hosts.map((host) => <div className="trusted-host-row" key={host.client_ip}>
+        <div><strong>{host.client_ip}</strong><span>Trusted</span></div>
+        <button type="button" className="secondary-button device-disconnect" onClick={() => onRevoke(host.client_ip)}>Revoke</button>
+      </div>)}
+    </div>
+  </section>
 }
 
 function TracesView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo, onRefresh }) {

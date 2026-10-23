@@ -332,6 +332,26 @@ def decide_pairing(request_id: str, decision: str, http_request: Request) -> dic
     return {"id": request_id, "status": record["status"]}
 
 
+@worker_app.get("/worker/trusted-hosts")
+def list_trusted_hosts(http_request: Request) -> list[dict[str, Any]]:
+    """Lists every IP this worker will accept jobs from. Loopback-only — the owner's own UI."""
+
+    _require_loopback(http_request)
+    return [{"client_ip": ip} for ip in sorted(_trusted_hosts)]
+
+
+@worker_app.delete("/worker/trusted-hosts/{client_ip}")
+def revoke_trusted_host(client_ip: str, http_request: Request) -> dict[str, Any]:
+    """Remove an IP from the trusted set, persisted. Future jobs from it will be refused."""
+
+    _require_loopback(http_request)
+    if client_ip not in _trusted_hosts:
+        raise HTTPException(status_code=404, detail="That host was not in the trusted list")
+    _trusted_hosts.discard(client_ip)
+    _save_trusted_hosts()
+    return {"status": "revoked", "client_ip": client_ip}
+
+
 @worker_app.post("/worker/runs", status_code=202)
 def start_worker_run(request: MatmulRunRequest, http_request: Request) -> dict[str, Any]:
     _require_trusted(http_request)

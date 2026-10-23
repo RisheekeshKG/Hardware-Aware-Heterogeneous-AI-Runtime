@@ -144,3 +144,12 @@ button { cursor: pointer; }
 .device-card-actions { display: flex; align-items: center; gap: 8px; }
 .device-disconnect { padding: 7px 11px; font: 9px 'DM Mono'; }
 .device-disconnect:hover { color: var(--red); border-color: #633c32; }
+
+.trusted-hosts-panel { margin-bottom: 18px; padding: 18px 20px; border-color: #633c32; }
+.trusted-hosts-panel .section-heading h2 { color: #e5d7bd; }
+.trusted-hosts-warn { color: var(--amber); }
+.trusted-hosts-list { display: grid; gap: 8px; margin-top: 12px; }
+.trusted-host-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); background: #141115; }
+.trusted-host-row > div { display: grid; gap: 4px; }
+.trusted-host-row strong { color: #e6edef; font: 12px 'DM Mono'; }
+.trusted-host-row span { color: var(--muted); font: 9px 'DM Mono'; }
