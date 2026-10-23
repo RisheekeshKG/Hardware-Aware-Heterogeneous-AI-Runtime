@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_submodules
+
+# Bake the user-facing `har` SDK into the bundle so scripts the runtime executes can `import har`
+# without any extra install step on the end user's machine.
+_har_sdk_imports = collect_submodules('har')
 
 a = Analysis(
     ['src/har_runtime/desktop_entry.py'],
     pathex=['src'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=_har_sdk_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
