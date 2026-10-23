@@ -158,7 +158,7 @@ function App() {
       {view === 'traces' && <TracesView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} />}
       {view === 'benchmarks' && <BenchmarksView runs={runtime.runs} trace={trace} selectedRun={selectedRun} onLaunch={() => setShowLauncher(true)} onSelectRun={setSelectedRunId} />}
     </main>
-    {showLauncher && <Launcher devices={runtime.devices} nodes={runtime.nodes} onClose={() => setShowLauncher(false)} onSubmit={launchRun} />}
+    {showLauncher && <Launcher devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onClose={() => setShowLauncher(false)} onSubmit={launchRun} />}
     {showScriptLauncher && <ScriptLauncher nodes={runtime.nodes} onClose={() => setShowScriptLauncher(false)} onSubmit={launchScript} />}
     {showConnect && <ConnectDevice onClose={() => setShowConnect(false)} onConnected={async () => { setShowConnect(false); notify('Device connection requested.'); await loadRuntime() }} />}
     {pairing[0] && <PairingPrompt request={pairing[0]} onDecided={(decision) => { setPairing((current) => current.slice(1)); notify(decision === 'accept' ? 'Connection accepted. This computer will now take tasks from that host.' : 'Connection declined.'); loadRuntime() }} />}
@@ -247,7 +247,7 @@ function RuntimeView({ devices, nodes, runs, activeRun, cpuInfo, onLaunch, onNav
     <PageHeader eyebrow="HAR" title="Overview" description="See what is running and which devices are available to help." action={<button className="primary-button" onClick={onLaunch}><span>+</span> Start a task</button>} />
     <section className="stat-grid"><StatCard label="Tasks in progress" value={String(runningCount + queuedCount).padStart(2, '0')} detail={`${runningCount} running · ${queuedCount} waiting`} accent="lime" /><StatCard label="Devices available" value={String((availableDevices.length ? 1 : 0) + onlineNodes.length).padStart(2, '0')} detail={`${availableDevices.length + onlineNodes.reduce((sum, node) => sum + node.capabilities.filter((capability) => capability.available !== false).length, 0)} runtimes across your machines`} accent="blue" /><StatCard label="System status" value={devices.length ? 'Ready' : 'Waiting'} detail={devices.length ? 'Everything is responding' : 'Looking for devices'} accent="green" /><StatCard label="Finished tasks" value={String(runs.filter((run) => run.status === 'completed').length).padStart(2, '0')} detail="Completed successfully" accent="amber" /></section>
     <section className="runtime-grid"><ActiveWorkload run={activeRun} onTrace={() => { if (activeRun) { onSelectRun(activeRun.id); onNavigate('traces') } }} /><FabricSummary devices={devices} nodes={nodes} cpuInfo={cpuInfo} onOpen={() => onNavigate('fabric')} /></section>
-    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Recent benchmark runs</h2></div><button className="text-button" onClick={() => onNavigate('benchmarks')}>Open benchmarks <span>-&gt;</span></button></div>{runs.length ? <div className="workload-list">{runs.slice(0, 8).map((run) => <WorkloadRow key={run.id} run={run} onClick={() => { onSelectRun(run.id); onNavigate('benchmarks') }} />)}</div> : <EmptyState title="No benchmark runs yet" detail="Benchmarks are optional dev tools. Scripts are the main workflow." action="Open scripts" onAction={() => onNavigate('workloads')} />}</section>
+    <section className="section-block"><div className="section-heading"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Recent benchmark runs</h2></div><button className="text-button" onClick={() => onNavigate('benchmarks')}>Open benchmarks <span>-&gt;</span></button></div>{runs.length ? <div className="workload-list">{runs.slice(0, 8).map((run) => <WorkloadRow key={run.id} run={run} nodes={nodes} onClick={() => { onSelectRun(run.id); onNavigate('benchmarks') }} />)}</div> : <EmptyState title="No benchmark runs yet" detail="Benchmarks are optional dev tools. Scripts are the main workflow." action="Open scripts" onAction={() => onNavigate('workloads')} />}</section>
   </>
 }
 
@@ -280,7 +280,7 @@ function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScriptLaun
     </section>
     <section className="section-block">
       <div className="section-heading"><div><div className="eyebrow">SCRIPT HISTORY</div><h2>Your Python runs</h2></div>{scripts.length ? <span className="chart-meta">{scripts.length} run{scripts.length === 1 ? '' : 's'}</span> : null}</div>
-      {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} active={script.id === selectedScriptId} onClick={() => onSelectScript(script.id === selectedScriptId ? null : script.id)} />)}</div> : <EmptyState title="No Python runs yet" detail="Run a Python file to see output and status here." action="Run Python file" onAction={onScriptLaunch} />}
+      {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} nodes={nodes} active={script.id === selectedScriptId} onClick={() => onSelectScript(script.id === selectedScriptId ? null : script.id)} />)}</div> : <EmptyState title="No Python runs yet" detail="Run a Python file to see output and status here." action="Run Python file" onAction={onScriptLaunch} />}
       {selectedScript && <ScriptDetail script={selectedScript} onClose={() => onSelectScript(null)} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
     </section>
   </>
@@ -378,20 +378,60 @@ function ConnectDevice({ onClose, onConnected }) {
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">ADD DEVICE</div><h2>Connect another computer</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>Open the HAR worker app on the other computer, then enter the address shown there.</p><label>Device address<input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="192.168.1.25:9000" disabled={waiting} autoFocus /></label><label>Device name <span className="optional">OPTIONAL</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></label><div className="advanced-note">{waiting ? 'Waiting for someone to click Accept on the other computer (up to 2 minutes)...' : 'Set the other computer to Worker on its Devices page. After you connect, click Accept there.'}</div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={waiting}>{waiting ? 'Waiting for approval...' : 'Connect device'} <span>-&gt;</span></button></div></form></div>
 }
 
-function Launcher({ devices, nodes, onClose, onSubmit }) { const available = devices.filter((device) => device.available); const [form, setForm] = useState({ backend: available[0]?.backend || 'cpu', size: 1024, warmup_iterations: 3, measured_iterations: 10, seed: 42, target_node: 'local' }); const [submitError, setSubmitError] = useState(''); const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value })); const submit = async (event) => { event.preventDefault(); setSubmitError(''); try { await onSubmit({ ...form, size: Number(form.size), warmup_iterations: Number(form.warmup_iterations), measured_iterations: Number(form.measured_iterations), seed: Number(form.seed) }) } catch (error) { setSubmitError(error.message) } }; return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}><div className="modal-header"><div><div className="eyebrow">NEW TASK</div><h2>Start a calculation</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div><p>Choose how much work to do and which device should handle it.</p><label>Computer<select value={form.target_node} onChange={update('target_node')}><option value="local">This computer</option>{nodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} / {node.status === 'online' ? 'ready' : 'not available'}</option>)}</select></label><label>Processing device<select value={form.backend} onChange={update('backend')}>{available.map((device) => <option key={device.backend} value={device.backend}>{friendlyBackend(device.backend)}</option>)}</select></label><label>Amount of work<select value={form.size} onChange={update('size')}><option value="512">Small</option><option value="1024">Medium</option><option value="2048">Large</option></select></label><div className="advanced-note">HAR will choose the safe measurement settings automatically.</div>{submitError && <div className="form-error">{submitError}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">Start task <span>-&gt;</span></button></div></form></div> }
+function backendsForTarget(targetNode, devices, nodes) {
+  if (targetNode === 'local') return (devices || []).filter((device) => device.available)
+  const node = (nodes || []).find((item) => item.node_id === targetNode)
+  if (!node) return []
+  return (node.capabilities || []).filter((capability) => capability.available !== false)
+}
+function Launcher({ devices, nodes, cpuInfo, onClose, onSubmit }) {
+  const remoteNodes = (nodes || []).filter((node) => node.name !== 'This device')
+  const [targetNode, setTargetNode] = useState('local')
+  const availableBackends = backendsForTarget(targetNode, devices, nodes)
+  const [form, setForm] = useState({ backend: availableBackends[0]?.backend || 'cpu', size: 1024, warmup_iterations: 3, measured_iterations: 10, seed: 42 })
+  const [submitError, setSubmitError] = useState('')
+  useEffect(() => {
+    const first = availableBackends[0]?.backend
+    if (first && !availableBackends.some((item) => item.backend === form.backend)) {
+      setForm((current) => ({ ...current, backend: first }))
+    }
+  }, [targetNode, availableBackends.map((item) => item.backend).join(',')])
+  const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
+  const backendLabel = (backend) => backend.backend === 'cpu' && targetNode === 'local' ? cpuLabel(backend, cpuInfo) : (backend.device_name || friendlyBackend(backend.backend))
+  const submit = async (event) => {
+    event.preventDefault(); setSubmitError('')
+    if (!form.backend) { setSubmitError('The selected computer has no available processing device.'); return }
+    try { await onSubmit({ ...form, target_node: targetNode, size: Number(form.size), warmup_iterations: Number(form.warmup_iterations), measured_iterations: Number(form.measured_iterations), seed: Number(form.seed) }) } catch (error) { setSubmitError(error.message) }
+  }
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal" onSubmit={submit}>
+    <div className="modal-header"><div><div className="eyebrow">NEW TASK</div><h2>Start a calculation</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
+    <p>Choose how much work to do and which device should handle it.</p>
+    <label>Computer<select value={targetNode} onChange={(event) => setTargetNode(event.target.value)}><option value="local">This computer</option>{remoteNodes.map((node) => <option key={node.node_id} value={node.node_id} disabled={node.status !== 'online'}>{node.name} {node.status === 'online' ? '' : '(not available)'}</option>)}</select></label>
+    <label>Processing device<select value={form.backend} onChange={update('backend')} disabled={!availableBackends.length}>{availableBackends.length ? availableBackends.map((backend) => <option key={backend.backend} value={backend.backend}>{backendLabel(backend)}</option>) : <option value="">No devices on this computer</option>}</select></label>
+    <label>Amount of work<select value={form.size} onChange={update('size')}><option value="512">Small</option><option value="1024">Medium</option><option value="2048">Large</option></select></label>
+    <div className="advanced-note">HAR will choose the safe measurement settings automatically.</div>
+    {submitError && <div className="form-error">{submitError}</div>}
+    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={!availableBackends.length}>Start task <span>-&gt;</span></button></div>
+  </form></div>
+}
 
-function WorkloadRow({ run, onClick }) { const total = run.request.measured_iterations || 1; const progress = Math.round((run.completed_iterations / total) * 100); return <button className="workload-row" onClick={onClick}><div className="workload-id"><span className={`workload-pulse ${run.status}`} /><div><strong>Matrix calculation</strong><span>{run.request.size} x {run.request.size} · {formatDate(run.created_at)}</span></div></div><div className="row-placement"><BackendBadge backend={run.request.backend} /><span>{run.node_id === 'local' ? 'This computer' : run.node_id}</span></div><div className="row-progress"><div className="progress-track"><div style={{ width: `${progress}%` }} /></div><span>{run.status === 'completed' ? '100%' : `${progress}%`}</span></div><StatusBadge status={run.status} /><div className="row-time">{formatDate(run.updated_at)}</div></button> }
+function WorkloadRow({ run, onClick, nodes }) { const total = run.request.measured_iterations || 1; const progress = Math.round((run.completed_iterations / total) * 100); return <button className="workload-row" onClick={onClick}><div className="workload-id"><span className={`workload-pulse ${run.status}`} /><div><strong>Matrix calculation</strong><span>{run.request.size} x {run.request.size} · {formatDate(run.created_at)}</span></div></div><div className="row-placement"><BackendBadge backend={run.request.backend} /><span>{nodeLabel(run.node_id, nodes)}</span></div><div className="row-progress"><div className="progress-track"><div style={{ width: `${progress}%` }} /></div><span>{run.status === 'completed' ? '100%' : `${progress}%`}</span></div><StatusBadge status={run.status} /><div className="row-time">{formatDate(run.updated_at)}</div></button> }
+function nodeLabel(nodeId, nodes) {
+  if (!nodeId || nodeId === 'local') return 'This computer'
+  const node = (nodes || []).find((item) => item.node_id === nodeId)
+  return node?.name || nodeId
+}
 function scriptElapsed(script) {
   if (!script.created_at || !script.updated_at) return null
   const seconds = (new Date(script.updated_at) - new Date(script.created_at)) / 1000
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null
 }
-function ScriptRow({ script, active, onClick }) {
+function ScriptRow({ script, active, onClick, nodes }) {
   const elapsed = scriptElapsed(script)
   const argsText = script.args?.length ? script.args.join(' ') : ''
   return <button type="button" className={`workload-row script-row ${active ? 'active' : ''}`} onClick={onClick}>
     <div className="workload-id"><span className={`workload-pulse ${script.status}`} /><div><strong>{script.filename}</strong><span>{argsText ? `${argsText} · ` : ''}{formatDate(script.created_at)}</span></div></div>
-    <div className="row-placement"><span>{script.target_node === 'local' ? 'This computer' : script.target_node}</span></div>
+    <div className="row-placement"><span>{nodeLabel(script.target_node, nodes)}</span></div>
     <div className="row-progress"><span>{elapsed != null ? `${elapsed.toFixed(2)} s` : (script.status === 'running' ? 'Running...' : '-')}</span></div>
     <StatusBadge status={script.status} />
     <div className="row-time">{script.exit_code == null ? (script.status === 'failed' ? 'Error' : script.status === 'running' ? 'Running' : 'Pending') : `Exit ${script.exit_code}`}</div>
