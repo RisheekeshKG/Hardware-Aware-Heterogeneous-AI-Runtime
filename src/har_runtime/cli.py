@@ -40,6 +40,29 @@ benchmark_app = typer.Typer(help="Run benchmark workloads")
 app.add_typer(benchmark_app, name="benchmark")
 
 
+@app.command("run-script")
+def run_script(
+    script: Path = typer.Argument(..., exists=True, dir_okay=False, readable=True),
+    script_args: Optional[list[str]] = typer.Argument(None),
+) -> None:
+    """Internal: run a .py file via runpy. Used by the subprocess isolation path.
+
+    `har execute script.py` is the user-facing entrypoint; `run-script` is what the
+    host/worker spawns when it isolates a job in its own OS process. Kept intentionally
+    minimal so that a crashing user script can only harm this subprocess.
+    """
+
+    import runpy
+    import sys as _sys
+
+    previous_argv = _sys.argv
+    _sys.argv = [str(script), *(script_args or [])]
+    try:
+        runpy.run_path(str(script), run_name="__main__")
+    finally:
+        _sys.argv = previous_argv
+
+
 @app.command()
 def devices() -> None:
     """Discover CPU, Apple MPS, and NVIDIA CUDA backends."""

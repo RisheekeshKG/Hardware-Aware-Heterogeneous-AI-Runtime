@@ -66,6 +66,8 @@ class WorkerScriptRun:
         self.created_at = datetime.now(timezone.utc).isoformat()
         self.started_at: str | None = None
         self.finished_at: str | None = None
+        self.execute_seconds: float | None = None  # monotonic, so skew-free
+        self.timed_out: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +80,8 @@ class WorkerScriptRun:
             "created_at": self.created_at,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "execute_seconds": self.execute_seconds,
+            "timed_out": self.timed_out,
         }
 
 
@@ -224,27 +228,42 @@ def _execute(record: WorkerRun) -> None:
 
 
 def _execute_script(record: WorkerScriptRun) -> None:
+    """Run the submitted script in an isolated subprocess with a hard timeout.
+
+    The worker now mirrors the host-side path from api.py: subprocess isolation
+    means a bad user script can't kill the worker service, timeouts are enforced
+    at the OS level, and `execute_seconds` comes from a monotonic clock so the
+    host doesn't have to subtract wall-clock timestamps that could skew.
+    """
+
+    from .subprocess_runner import DEFAULT_SCRIPT_TIMEOUT_SECONDS, run_script_in_subprocess
+
     record.status = "running"
     record.started_at = datetime.now(timezone.utc).isoformat()
     try:
         with tempfile.TemporaryDirectory(prefix="har-worker-job-") as directory:
-            script_path = Path(directory) / Path(record.request.filename).name
-            script_path.write_text(record.request.content, encoding="utf-8")
-            previous_argv = sys.argv
-            sys.argv = [str(script_path), *record.request.args]
-            output = io.StringIO()
-            try:
-                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-                    runpy.run_path(str(script_path), run_name="__main__")
-            finally:
-                sys.argv = previous_argv
-            record.output = output.getvalue()[-100_000:]
-            record.exit_code = 0
-            record.status = "completed"
-    except SystemExit as error:
-        record.exit_code = int(error.code) if isinstance(error.code, int) else 1
-        record.error = None if record.exit_code == 0 else str(error)
-        record.status = "completed" if record.exit_code == 0 else "failed"
+            result = run_script_in_subprocess(
+                filename=Path(record.request.filename).name,
+                content=record.request.content,
+                args=record.request.args,
+                cwd=Path(directory),
+                timeout_seconds=record.request.timeout_seconds or DEFAULT_SCRIPT_TIMEOUT_SECONDS,
+            )
+            output_parts = [result["stdout"]]
+            if result["stderr"]:
+                output_parts.append(result["stderr"])
+            record.output = "".join(output_parts)[-100_000:]
+            record.exit_code = result["exit_code"]
+            record.execute_seconds = result["execute_seconds"]
+            record.timed_out = bool(result["timed_out"])
+            if result["timed_out"]:
+                record.status = "failed"
+                record.error = f"Script exceeded {record.request.timeout_seconds:g}s"
+            elif result["exit_code"] == 0:
+                record.status = "completed"
+            else:
+                record.status = "failed"
+                record.error = result["stderr"][-4000:] or f"Exit code {result['exit_code']}"
     except Exception as error:
         record.error = str(error)
         record.status = "failed"
@@ -264,6 +283,19 @@ def worker_health() -> dict[str, str]:
 @worker_app.get("/worker/capabilities")
 def capabilities() -> list[dict[str, Any]]:
     return [device.to_dict() for device in discover_devices()]
+
+
+@worker_app.get("/worker/env-hash")
+def worker_env_hash() -> dict[str, object]:
+    """Return this worker's Python + key-package fingerprint.
+
+    The host calls this before dispatching to warn the user if the worker is missing
+    `torch` or runs a different major version — the common silent failure.
+    """
+
+    from .env_hash import env_fingerprint
+
+    return env_fingerprint()
 
 
 @worker_app.post("/worker/join", response_model=None)

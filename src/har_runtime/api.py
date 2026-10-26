@@ -75,6 +75,10 @@ class ScriptRunRequest(BaseModel):
     content: str = Field(min_length=1, max_length=1_000_000)
     args: list[str] = Field(default_factory=list, max_length=32)
     target_node: str = "local"
+    # Hard timeout for the user script. 0 disables the limit (not recommended). The default
+    # matches subprocess_runner.DEFAULT_SCRIPT_TIMEOUT_SECONDS and prevents a runaway script
+    # from pinning a worker forever.
+    timeout_seconds: float = Field(default=600.0, ge=0.0, le=86_400.0)
 
 
 class RunRecord:
@@ -208,7 +212,8 @@ class ScriptRecord:
         self.updated_at = self.created_at
         self.started_at: str | None = None  # when the interpreter actually started
         self.finished_at: str | None = None  # when it returned (local) or the worker reported done
-        self.remote_execute_seconds: float | None = None  # end-to-end on the worker, from its own clock
+        self.remote_execute_seconds: float | None = None  # end-to-end on the worker, from its monotonic clock
+        self.timed_out: bool = False
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -225,6 +230,7 @@ class ScriptRecord:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "remote_execute_seconds": self.remote_execute_seconds,
+            "timed_out": self.timed_out,
         }
 
 
@@ -236,31 +242,47 @@ def _validate_script_filename(filename: str) -> str:
 
 
 def _run_script_in_process(record: ScriptRecord) -> None:
-    """Run a user-approved file without invoking a shell command."""
+    """Run a user-approved file in an isolated subprocess with a hard timeout.
+
+    Replacing the previous same-process runpy means a crashing / hanging user script
+    can only harm its own OS process; the API stays responsive and we can SIGKILL the
+    whole process group on timeout. Duration comes from `time.monotonic()` inside
+    `subprocess_runner`, so it's immune to wall-clock jumps.
+    """
+
+    from .subprocess_runner import DEFAULT_SCRIPT_TIMEOUT_SECONDS as _DEFAULT_SCRIPT_TIMEOUT_SECONDS
+    from .subprocess_runner import run_script_in_subprocess
 
     record.status = "running"
     record.started_at = datetime.now(timezone.utc).isoformat()
     record.updated_at = record.started_at
     try:
         with tempfile.TemporaryDirectory(prefix="har-job-") as directory:
-            script_path = Path(directory) / record.request.filename
-            script_path.write_text(record.request.content, encoding="utf-8")
-            previous_argv = sys.argv
-            sys.argv = [str(script_path), *record.request.args]
-            output = io.StringIO()
-            try:
-                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-                    runpy.run_path(str(script_path), run_name="__main__")
-            finally:
-                sys.argv = previous_argv
-            record.output = output.getvalue()[-100_000:]
-            record.exit_code = 0
-            record.status = "completed"
-    except SystemExit as error:
-        record.exit_code = int(error.code) if isinstance(error.code, int) else 1
-        record.error = None if record.exit_code == 0 else str(error)
-        record.status = "completed" if record.exit_code == 0 else "failed"
-    except Exception as error:  # Keep user script failures visible to the app.
+            result = run_script_in_subprocess(
+                filename=record.request.filename,
+                content=record.request.content,
+                args=record.request.args,
+                cwd=Path(directory),
+                timeout_seconds=record.request.timeout_seconds or _DEFAULT_SCRIPT_TIMEOUT_SECONDS,
+            )
+            # Combine streams for a single "output" buffer, keeping stderr distinguishable
+            # only when the script actually wrote to it.
+            output_parts = [result["stdout"]]
+            if result["stderr"]:
+                output_parts.append(result["stderr"])
+            record.output = "".join(output_parts)[-100_000:]
+            record.exit_code = result["exit_code"]
+            record.timed_out = bool(result["timed_out"])
+            record.remote_execute_seconds = result["execute_seconds"]
+            if result["timed_out"]:
+                record.status = "failed"
+                record.error = f"Script exceeded {record.request.timeout_seconds:g}s"
+            elif result["exit_code"] == 0:
+                record.status = "completed"
+            else:
+                record.status = "failed"
+                record.error = result["stderr"][-4000:] or f"Exit code {result['exit_code']}"
+    except Exception as error:
         record.error = str(error)
         record.status = "failed"
     finally:
@@ -497,6 +519,50 @@ def disconnect_node(node_id: str) -> dict[str, Any]:
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "hardware-aware-ai-runtime"}
+
+
+@app.get("/api/env-hash")
+def host_env_hash() -> dict[str, object]:
+    """This host's Python + key-package fingerprint."""
+
+    from .env_hash import env_fingerprint
+
+    return env_fingerprint()
+
+
+@app.get("/api/nodes/{node_id}/env-hash")
+def node_env_hash(node_id: str) -> dict[str, Any]:
+    """Fetch a remote worker's fingerprint and flag any mismatch against this host's.
+
+    Returns `{host, worker, mismatches: [...], compatible: bool}` so the UI can show
+    "Your worker is missing pynvml and has torch 2.1 vs. your 2.3" instead of letting
+    the job crash later with a stack trace.
+    """
+
+    import httpx
+
+    node = _nodes.get(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+    base_url = node.get("base_url", "").rstrip("/")
+    try:
+        response = httpx.get(f"{base_url}/worker/env-hash", timeout=5.0)
+        response.raise_for_status()
+        worker = response.json()
+    except httpx.HTTPError as error:
+        raise HTTPException(status_code=502, detail=f"Could not reach worker: {error}") from error
+
+    from .env_hash import env_fingerprint
+
+    host = env_fingerprint()
+    mismatches: list[str] = []
+    if host["python"] != worker["python"]:
+        mismatches.append(f"python {host['python']} vs {worker['python']}")
+    for name, host_version in host["packages"].items():
+        worker_version = worker["packages"].get(name, "absent")
+        if host_version != worker_version:
+            mismatches.append(f"{name}: {host_version} / worker {worker_version}")
+    return {"host": host, "worker": worker, "mismatches": mismatches, "compatible": not mismatches}
 
 
 @app.get("/api/devices")
@@ -748,16 +814,23 @@ def _run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                 record.error = worker_record.get("error")
                 record.exit_code = worker_record.get("exit_code")
                 if record.status in {"completed", "failed"}:
-                    # Pull the worker-side timing when available so we can show transport vs execute.
-                    worker_started = worker_record.get("started_at") or worker_record.get("created_at")
-                    worker_finished = worker_record.get("finished_at") or worker_record.get("updated_at")
-                    if worker_started and worker_finished:
-                        try:
-                            start_dt = datetime.fromisoformat(worker_started.replace("Z", "+00:00"))
-                            end_dt = datetime.fromisoformat(worker_finished.replace("Z", "+00:00"))
-                            record.remote_execute_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
-                        except ValueError:
-                            record.remote_execute_seconds = None
+                    # Prefer the worker's monotonic execute_seconds — immune to clock skew between
+                    # host and worker. Only fall back to subtracting ISO timestamps if the worker
+                    # is older than 1.0.2 and didn't send it.
+                    monotonic = worker_record.get("execute_seconds")
+                    if isinstance(monotonic, (int, float)) and monotonic >= 0:
+                        record.remote_execute_seconds = float(monotonic)
+                    else:
+                        worker_started = worker_record.get("started_at") or worker_record.get("created_at")
+                        worker_finished = worker_record.get("finished_at") or worker_record.get("updated_at")
+                        if worker_started and worker_finished:
+                            try:
+                                start_dt = datetime.fromisoformat(worker_started.replace("Z", "+00:00"))
+                                end_dt = datetime.fromisoformat(worker_finished.replace("Z", "+00:00"))
+                                record.remote_execute_seconds = max((end_dt - start_dt).total_seconds(), 0.0)
+                            except ValueError:
+                                record.remote_execute_seconds = None
+                    record.timed_out = bool(worker_record.get("timed_out", False))
                     break
                 time.sleep(0.25)
     except Exception as error:
