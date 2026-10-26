@@ -85,13 +85,32 @@ def test_python_script_run_is_managed_and_captures_output():
     )
     assert response.status_code == 202
     script_id = response.json()["id"]
-    for _ in range(20):
+    # Subprocess spawn + Python startup can take ~1 s, especially on CI; poll for up to 15 s.
+    for _ in range(150):
         result = client.get(f"/api/scripts/{script_id}").json()
         if result["status"] in {"completed", "failed"}:
             break
-        time.sleep(0.01)
-    assert result["status"] == "completed"
+        time.sleep(0.1)
+    assert result["status"] == "completed", result
     assert "hello from har" in result["output"]
+
+
+def test_python_script_idempotency_key_dedupes_within_window():
+    client = TestClient(app)
+    body = {"filename": "idemp.py", "content": "print('x')", "idempotency_key": "test-key-abc"}
+    first = client.post("/api/scripts", json=body)
+    assert first.status_code == 202
+    first_id = first.json()["id"]
+
+    # Immediate retry with the same key must return the same record, not spawn a second run.
+    second = client.post("/api/scripts", json=body)
+    assert second.status_code == 202
+    assert second.json()["id"] == first_id, "Duplicate idempotency key must return existing record"
+
+    # A different key starts a new run.
+    different = client.post("/api/scripts", json={**body, "idempotency_key": "test-key-other"})
+    assert different.status_code == 202
+    assert different.json()["id"] != first_id
 
 
 def test_python_script_rejects_non_python_filename():

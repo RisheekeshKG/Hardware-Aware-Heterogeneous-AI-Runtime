@@ -108,6 +108,10 @@ LOOPBACK_CLIENTS = {"127.0.0.1", "::1", "localhost", "testclient"}
 PAIRING_REQUEST_TTL_SECONDS = 120.0
 # Hosts approved on this machine, by IP. Only they (and this machine) may run work here.
 _trusted_hosts: set[str] = set()
+# Per-trusted-host HMAC secret, in memory only. Lost on restart on purpose — the host
+# re-fetches it on its next /worker/join call, and if an old secret leaked that leak
+# window shrinks to the time between restarts.
+_host_secrets: dict[str, str] = {}
 _pairing_requests: dict[str, dict[str, Any]] = {}
 _pairing_lock = threading.Lock()
 # What the person at this computer sees about the host it works for.
@@ -150,9 +154,34 @@ def _is_loopback_client(request: Request) -> bool:
     return _client_ip(request) in LOOPBACK_CLIENTS
 
 
-def _require_trusted(request: Request) -> None:
+async def _require_trusted(request: Request) -> None:
+    """Accept the request if it's loopback, HMAC-signed by a known host, or (fallback) from a trusted IP.
+
+    Signed requests are preferred and verified strictly: a bad signature from an otherwise-
+    trusted IP is rejected (401), not quietly let through. Unsigned requests still work for
+    backward compatibility with hosts that paired before this version.
+    """
+
+    from .signing import HMAC_SIGNATURE_HEADER, HMAC_TIMESTAMP_HEADER, verify_signature
+
     client = _client_ip(request)
-    if client in LOOPBACK_CLIENTS or client in _trusted_hosts:
+    if client in LOOPBACK_CLIENTS:
+        return
+
+    headers = dict(request.headers)
+    has_signature = any(key.lower() == HMAC_SIGNATURE_HEADER.lower() for key in headers)
+    if has_signature:
+        secret = _host_secrets.get(client)
+        if not secret:
+            raise HTTPException(status_code=401, detail="Host presented a signature but is not paired")
+        body = await request.body()
+        path = request.url.path
+        if not verify_signature(secret, request.method, path, body, headers):
+            raise HTTPException(status_code=401, detail="Request signature did not verify")
+        return
+
+    # Backward-compat fallback: pre-HMAC hosts still identified by IP ACL only.
+    if client in _trusted_hosts:
         return
     raise HTTPException(status_code=403, detail="This computer has not accepted a connection from you")
 
@@ -322,7 +351,22 @@ def join_host(request: WorkerJoinRequest, http_request: Request) -> dict[str, An
         name=request.name or _default_name(),
         node_id=request.node_id or stable_node_id(),
     )
-    return {"status": "joining", "node_id": _worker_config["node_id"], "coordinator": request.coordinator}
+    # Mint a per-host HMAC secret on first join (or whenever the host has forgotten it).
+    # Loopback requests get `null` — the UI only talks over loopback so it doesn't need to sign.
+    shared_secret: str | None = None
+    if client and client not in LOOPBACK_CLIENTS:
+        from .signing import new_shared_secret as _new_secret
+
+        shared_secret = _host_secrets.get(client)
+        if not shared_secret:
+            shared_secret = _new_secret()
+            _host_secrets[client] = shared_secret
+    return {
+        "status": "joining",
+        "node_id": _worker_config["node_id"],
+        "coordinator": request.coordinator,
+        "shared_secret": shared_secret,
+    }
 
 
 def _pairing_request_for(client: str, request: WorkerJoinRequest) -> dict[str, Any]:
@@ -396,8 +440,8 @@ def revoke_trusted_host(client_ip: str, http_request: Request) -> dict[str, Any]
 
 
 @worker_app.post("/worker/runs", status_code=202)
-def start_worker_run(request: MatmulRunRequest, http_request: Request) -> dict[str, Any]:
-    _require_trusted(http_request)
+async def start_worker_run(request: MatmulRunRequest, http_request: Request) -> dict[str, Any]:
+    await _require_trusted(http_request)
     try:
         get_device_info(request.backend)
     except (ValueError, RuntimeError) as error:
@@ -410,8 +454,8 @@ def start_worker_run(request: MatmulRunRequest, http_request: Request) -> dict[s
 
 
 @worker_app.post("/worker/scripts", status_code=202)
-def start_worker_script(request: ScriptRunRequest, http_request: Request) -> dict[str, Any]:
-    _require_trusted(http_request)
+async def start_worker_script(request: ScriptRunRequest, http_request: Request) -> dict[str, Any]:
+    await _require_trusted(http_request)
     if Path(request.filename).name != request.filename or Path(request.filename).suffix.lower() != ".py":
         raise HTTPException(status_code=422, detail="Only a single .py file can be run")
     record = WorkerScriptRun(request)
@@ -422,8 +466,8 @@ def start_worker_script(request: ScriptRunRequest, http_request: Request) -> dic
 
 
 @worker_app.get("/worker/scripts/{run_id}")
-def worker_script_status(run_id: str, http_request: Request) -> dict[str, Any]:
-    _require_trusted(http_request)
+async def worker_script_status(run_id: str, http_request: Request) -> dict[str, Any]:
+    await _require_trusted(http_request)
     record = _worker_script_runs.get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Worker script run not found")
@@ -431,8 +475,8 @@ def worker_script_status(run_id: str, http_request: Request) -> dict[str, Any]:
 
 
 @worker_app.get("/worker/runs/{run_id}")
-def worker_run_status(run_id: str, http_request: Request) -> dict[str, Any]:
-    _require_trusted(http_request)
+async def worker_run_status(run_id: str, http_request: Request) -> dict[str, Any]:
+    await _require_trusted(http_request)
     record = _worker_runs.get(run_id)
     if not record:
         raise HTTPException(status_code=404, detail="Worker run not found")

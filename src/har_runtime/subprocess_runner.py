@@ -47,10 +47,14 @@ def run_script_in_subprocess(
     script_path = cwd / filename
     script_path.write_text(content, encoding="utf-8")
 
-    # In a PyInstaller-frozen build, `sys.executable` is the har-runtime-server bootloader,
-    # so re-invoking ourselves with `run-script <path>` lets the frozen app run user Python
-    # without needing a separately-installed interpreter on the worker machine.
-    cmd = [sys.executable, "run-script", str(script_path), *args]
+    # Frozen vs dev: in a PyInstaller build, `sys.executable` is the har-runtime-server
+    # bootloader, so re-invoking ourselves with `run-script <path>` reuses the bundled
+    # Python without needing a separately-installed interpreter. In a plain pip install,
+    # `sys.executable` is a regular python and we just hand it the script directly.
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "run-script", str(script_path), *args]
+    else:
+        cmd = [sys.executable, str(script_path), *args]
 
     popen_kwargs: dict[str, Any] = dict(
         cwd=str(cwd),

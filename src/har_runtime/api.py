@@ -79,6 +79,10 @@ class ScriptRunRequest(BaseModel):
     # matches subprocess_runner.DEFAULT_SCRIPT_TIMEOUT_SECONDS and prevents a runaway script
     # from pinning a worker forever.
     timeout_seconds: float = Field(default=600.0, ge=0.0, le=86_400.0)
+    # If set, a retry (same key within 5 minutes) is deduped: the server returns the existing
+    # record instead of starting another run. A client picks any random string per logical
+    # submission — common pattern is a UUID generated client-side right before the POST.
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class RunRecord:
@@ -193,6 +197,9 @@ async def restrict_remote_clients(request, call_next):
 
 _runs: dict[str, RunRecord] = {}
 _nodes: dict[str, dict[str, Any]] = {}
+# Per-worker HMAC secret, received from the worker's /worker/join response. In memory only;
+# if the host restarts it re-pairs on the next connect and gets a fresh secret from the worker.
+_node_secrets: dict[str, str] = {}
 # Workers removed with Disconnect. Their registrations get 410 Gone, which tells
 # the worker to stop, until the user adds the device again.
 _disconnected_nodes: set[str] = set()
@@ -382,21 +389,31 @@ def _run_benchmark(record: RunRecord) -> None:
 def _run_remote_benchmark(record: RunRecord, node: dict[str, Any]) -> None:
     """Submit to a worker and poll its real execution state."""
 
+    import json as _json
+
     import httpx
 
     record.status = "running"
     record.publish({"type": "status", "status": "running", "node_id": record.node_id})
+    node_id = node.get("node_id", "")
     try:
         with httpx.Client(timeout=30.0) as client:
             started = time.perf_counter()
-            response = client.post(f"{node['base_url']}/worker/runs", json=record.request.model_dump())
+            submit_url = f"{node['base_url']}/worker/runs"
+            submit_body = _json.dumps(record.request.model_dump()).encode("utf-8")
+            response = client.post(
+                submit_url,
+                content=submit_body,
+                headers={"Content-Type": "application/json", **_signed_headers_for(node_id, "POST", submit_url, submit_body)},
+            )
             record.network_round_trip_ms = (time.perf_counter() - started) * 1000
             response.raise_for_status()
             worker_run_id = response.json()["id"]
             node["active_job"] = record.id
             while True:
                 started = time.perf_counter()
-                status_response = client.get(f"{node['base_url']}/worker/runs/{worker_run_id}")
+                poll_url = f"{node['base_url']}/worker/runs/{worker_run_id}"
+                status_response = client.get(poll_url, headers=_signed_headers_for(node_id, "GET", poll_url))
                 record.network_round_trip_ms = (time.perf_counter() - started) * 1000
                 status_response.raise_for_status()
                 worker_record = status_response.json()
@@ -490,6 +507,8 @@ def disconnect_node(node_id: str) -> dict[str, Any]:
     if removed is None:
         raise HTTPException(status_code=404, detail="Node is not registered")
     _disconnected_nodes.add(node_id)
+    # Forget the HMAC secret so a re-pair starts from scratch (the worker will mint a new one anyway).
+    _node_secrets.pop(node_id, None)
 
     now = datetime.now(timezone.utc).isoformat()
     aborted_runs: list[str] = []
@@ -545,8 +564,9 @@ def node_env_hash(node_id: str) -> dict[str, Any]:
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     base_url = node.get("base_url", "").rstrip("/")
+    env_url = f"{base_url}/worker/env-hash"
     try:
-        response = httpx.get(f"{base_url}/worker/env-hash", timeout=5.0)
+        response = httpx.get(env_url, headers=_signed_headers_for(node_id, "GET", env_url), timeout=5.0)
         response.raise_for_status()
         worker = response.json()
     except httpx.HTTPError as error:
@@ -582,6 +602,24 @@ def session() -> dict[str, Any]:
 
 CONNECT_APPROVAL_TIMEOUT_SECONDS = 120.0
 DEFAULT_WORKER_PORT = 9000
+
+
+def _signed_headers_for(node_id: str, method: str, url: str, body: bytes = b"") -> dict[str, str]:
+    """Return HMAC headers for a host→worker call, or `{}` for workers we have no secret for.
+
+    `url` can be a full URL; the signature only covers the path, which is what the worker
+    sees. An empty dict means "fall back to IP ACL", which old workers still accept.
+    """
+
+    secret = _node_secrets.get(node_id)
+    if not secret:
+        return {}
+    from urllib.parse import urlsplit
+
+    from .signing import sign_request
+
+    path = urlsplit(url).path or "/"
+    return sign_request(secret, method, path, body)
 
 
 def _normalize_worker_url(raw: str) -> str:
@@ -739,7 +777,13 @@ def connect_node(request: NodeConnectRequest) -> dict[str, Any]:
                         continue
                     response.raise_for_status()
                     joined = response.json()
-                    _disconnected_nodes.discard(joined.get("node_id", ""))
+                    node_id = joined.get("node_id", "")
+                    _disconnected_nodes.discard(node_id)
+                    # Stash the HMAC secret the worker handed us so later host→worker calls
+                    # can prove their identity cryptographically instead of relying on IP.
+                    secret = joined.get("shared_secret")
+                    if node_id and isinstance(secret, str) and secret:
+                        _node_secrets[node_id] = secret
                     return joined
                 except httpx.RequestError as error:
                     last_error = error
@@ -794,19 +838,29 @@ def connect_discovered_node(request: DiscoveryConnectRequest) -> dict[str, Any]:
 
 
 def _run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
+    import json as _json
+
     import httpx
 
     record.status = "running"
     record.started_at = datetime.now(timezone.utc).isoformat()
     record.updated_at = record.started_at
+    node_id = node.get("node_id", "")
     try:
         with httpx.Client(timeout=30.0) as client:
-            response = client.post(f"{node['base_url']}/worker/scripts", json=record.request.model_dump())
+            submit_url = f"{node['base_url']}/worker/scripts"
+            submit_body = _json.dumps(record.request.model_dump()).encode("utf-8")
+            response = client.post(
+                submit_url,
+                content=submit_body,
+                headers={"Content-Type": "application/json", **_signed_headers_for(node_id, "POST", submit_url, submit_body)},
+            )
             response.raise_for_status()
             worker_run_id = response.json()["id"]
             node["active_job"] = record.id
             while True:
-                worker_response = client.get(f"{node['base_url']}/worker/scripts/{worker_run_id}")
+                poll_url = f"{node['base_url']}/worker/scripts/{worker_run_id}"
+                worker_response = client.get(poll_url, headers=_signed_headers_for(node_id, "GET", poll_url))
                 worker_response.raise_for_status()
                 worker_record = worker_response.json()
                 record.status = worker_record["status"]
@@ -855,12 +909,42 @@ def script_status(script_id: str) -> dict[str, Any]:
     return record.snapshot()
 
 
+_IDEMPOTENCY_WINDOW_SECONDS = 300.0
+
+
+def _find_recent_idempotent_script(key: str) -> ScriptRecord | None:
+    """Return a <5-minute-old record that matches this idempotency key, else None.
+
+    The scan is linear over `_script_runs`, which is bounded by the UI's history size
+    (~hundreds). Durable storage will move this to an index when the SQLite migration lands.
+    """
+
+    now = datetime.now(timezone.utc)
+    for existing in _script_runs.values():
+        if getattr(existing.request, "idempotency_key", None) != key:
+            continue
+        try:
+            created = datetime.fromisoformat(existing.created_at)
+        except ValueError:
+            continue
+        if (now - created).total_seconds() <= _IDEMPOTENCY_WINDOW_SECONDS:
+            return existing
+    return None
+
+
 @app.post("/api/scripts", status_code=202)
 def start_script(request: ScriptRunRequest) -> dict[str, Any]:
     try:
         _validate_script_filename(request.filename)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
+
+    # Return the existing record on duplicate submission (e.g. network retry after a timeout)
+    # so the user never ends up with two runs of the same script.
+    if request.idempotency_key:
+        existing = _find_recent_idempotent_script(request.idempotency_key)
+        if existing is not None:
+            return existing.snapshot()
 
     # Validate the target *before* creating the record so a 400 can't leave an orphan
     # queued row sitting in _script_runs forever (observed: GET /api/scripts kept
