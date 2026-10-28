@@ -13,13 +13,61 @@ from .calibration import CalibrationCache
 from .inventory import SdkDevice, devices as list_devices
 
 
-# Rough one-way host<->device transfer bandwidth, in bytes/sec. Local PCIe/UMA is fast enough that we
-# treat it as free compared to compute for most workloads, so we use conservative-but-not-zero numbers.
-_LOCAL_TRANSFER_BPS = {
-    "cuda": 12_000_000_000,  # ~12 GB/s PCIe 3/4 effective
-    "mps":  40_000_000_000,  # ~40 GB/s unified memory
-    "cpu":  float("inf"),
+# Last-resort fallback bandwidths, in bytes/sec. Only used when no measurement exists in the
+# calibration cache (first call ever before measurement completes, or a backend added without
+# a probe yet). On any real machine the router prefers the measured value from calibration.db.
+_FALLBACK_TRANSFER_BPS = {
+    "cuda":     12_000_000_000,  # ~12 GB/s PCIe 3/4 effective
+    "mps":      40_000_000_000,  # ~40 GB/s Apple unified memory (very conservative)
+    "directml": 10_000_000_000,  # ~10 GB/s DirectX 12 shared memory
+    "xpu":      25_000_000_000,  # ~25 GB/s Intel Arc PCIe
+    "cpu":      float("inf"),
 }
+
+
+def _sync(torch_device) -> None:
+    """Backend-aware barrier so bandwidth timing isn't short-circuited by asynchronous queueing."""
+
+    import torch
+
+    if torch_device.type == "cuda":
+        torch.cuda.synchronize()
+    elif torch_device.type == "mps":
+        torch.mps.synchronize()
+
+
+def measure_bandwidth(device: SdkDevice, mb: int = 64) -> float:
+    """Return actual host↔device bytes/sec for `device`, measured on this machine.
+
+    Moves an `mb`-megabyte float32 tensor to the device repeatedly after a warm-up and times it.
+    Called once per machine per backend; the result is cached in `calibration.db`'s `bandwidth`
+    table so subsequent process starts don't re-pay the measurement.
+    """
+
+    import torch
+
+    if device.backend == "cpu":
+        return float("inf")
+
+    torch_device = torch.device(device.torch_device)
+    numel = (mb * 1024 * 1024) // 4   # float32
+    source = torch.zeros(numel, dtype=torch.float32)
+    bytes_per_move = source.element_size() * source.numel()
+
+    # Warm-up: first copy pays for CUDA context init, Metal kernel JIT, driver page-table setup, etc.
+    for _ in range(3):
+        moved = source.to(torch_device, non_blocking=False)
+        _sync(torch_device)
+        del moved
+
+    iterations = 5
+    start = time.perf_counter()
+    for _ in range(iterations):
+        moved = source.to(torch_device, non_blocking=False)
+        _sync(torch_device)
+        del moved
+    elapsed = time.perf_counter() - start
+    return (iterations * bytes_per_move) / elapsed if elapsed > 0 else float("inf")
 
 
 @dataclass
@@ -70,10 +118,36 @@ class Router:
     once and records a sample. Over a few calls per shape, the cache fills in and the choice stabilizes.
     """
 
-    def __init__(self, cache: CalibrationCache | None = None, hysteresis: float = 0.10) -> None:
+    def __init__(self, cache: CalibrationCache | None = None, hysteresis: float = 0.10, auto_measure: bool = True) -> None:
         self.cache = cache or CalibrationCache()
         self.hysteresis = hysteresis
         self._devices = list_devices()
+        if auto_measure:
+            self._ensure_bandwidths()
+
+    def _ensure_bandwidths(self) -> None:
+        """Measure every available non-CPU backend once; skip if we already have a cached value."""
+
+        for device in self._devices:
+            if not device.available or device.backend == "cpu":
+                continue
+            if self.cache.get_bandwidth(device.backend) is not None:
+                continue
+            try:
+                bps = measure_bandwidth(device)
+                self.cache.record_bandwidth(device.backend, bps, bytes_sampled=64 * 1024 * 1024)
+            except Exception:
+                # Hardware unreachable mid-measurement or torch misbehaving on this backend —
+                # don't crash the router; the fallback dict will cover this backend.
+                pass
+
+    def _bandwidth_for(self, backend: str) -> float:
+        """Measured bytes/sec from the calibration cache, with the fallback dict as a last resort."""
+
+        measured = self.cache.get_bandwidth(backend)
+        if measured is not None and measured > 0:
+            return measured
+        return _FALLBACK_TRANSFER_BPS.get(backend, 1_000_000_000)
 
     @property
     def available(self) -> list[SdkDevice]:
@@ -110,7 +184,7 @@ class Router:
                 return RouteDecision(device, f"never measured on {device.backend}; sampling", None, bytes_moved if device.backend != current_backend else 0)
             transfer = 0.0
             if device.backend != current_backend:
-                bandwidth = _LOCAL_TRANSFER_BPS.get(device.backend, 1_000_000_000)
+                bandwidth = self._bandwidth_for(device.backend)
                 transfer = bytes_moved / bandwidth if bandwidth else 0.0
             total = compute + transfer
             if best is None or total < best[1]:

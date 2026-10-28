@@ -48,6 +48,19 @@ class CalibrationCache:
                 )
                 """
             )
+            # Measured host↔device transfer bandwidth per backend. Written once per machine
+            # when the router first sees a device; the hardcoded `_LOCAL_TRANSFER_BPS` guess
+            # is only used as a fallback for backends we haven't measured yet.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bandwidth (
+                    backend TEXT PRIMARY KEY,
+                    bytes_per_second REAL NOT NULL,
+                    bytes_sampled INTEGER NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+                """
+            )
 
     def get(self, shape_key: str, backend: str) -> float | None:
         with self._lock, self._connect() as connection:
@@ -90,3 +103,26 @@ class CalibrationCache:
     def known_backends(self, shape_key: str, candidates: Iterable[str]) -> set[str]:
         measured = set(self.all_for(shape_key).keys())
         return measured.intersection(set(candidates))
+
+    def get_bandwidth(self, backend: str) -> float | None:
+        """Return the measured bytes/sec for this backend on this machine, or None if we haven't measured yet."""
+
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                "SELECT bytes_per_second FROM bandwidth WHERE backend = ?",
+                (backend,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def record_bandwidth(self, backend: str, bytes_per_second: float, bytes_sampled: int) -> None:
+        """Store a bandwidth measurement. Only called once per machine per backend (not EWMA'd —
+        PCIe/unified-memory bandwidth is a hardware property, not a changing workload cost)."""
+
+        import time
+
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "REPLACE INTO bandwidth (backend, bytes_per_second, bytes_sampled, updated_at) VALUES (?, ?, ?, ?)",
+                (backend, bytes_per_second, bytes_sampled, time.time()),
+            )
+            connection.commit()

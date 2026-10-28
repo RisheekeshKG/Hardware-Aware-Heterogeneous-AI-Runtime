@@ -7,7 +7,7 @@ import pytest
 
 from har.calibration import CalibrationCache
 from har.inventory import SdkDevice
-from har.router import Router, shape_key
+from har.router import Router, _FALLBACK_TRANSFER_BPS, shape_key
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ def test_shape_key_differs_by_argument_shape():
 
 def test_router_sticks_on_cold_cache(monkeypatch, cache):
     # Pretend only CPU and MPS exist so the "single available backend" early-return doesn't fire.
-    router = Router(cache=cache)
+    router = Router(cache=cache, auto_measure=False)
     router._devices = [
         SdkDevice(backend="mps", torch_device="mps", name="Apple MPS", available=True),
         SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True),
@@ -58,3 +58,52 @@ def test_router_sticks_on_cold_cache(monkeypatch, cache):
     # Cold cache → router must stay on the current backend so first call doesn't move data for nothing.
     assert decision.device.backend == "cpu"
     assert "cold" in decision.reason.lower()
+
+
+def test_bandwidth_cache_round_trip(cache):
+    assert cache.get_bandwidth("cuda") is None
+    cache.record_bandwidth("cuda", 15_000_000_000, bytes_sampled=64 * 1024 * 1024)
+    assert cache.get_bandwidth("cuda") == pytest.approx(15_000_000_000)
+
+
+def test_router_prefers_measured_bandwidth_over_fallback(cache):
+    router = Router(cache=cache, auto_measure=False)
+    router._devices = [
+        SdkDevice(backend="mps", torch_device="mps", name="Apple MPS", available=True),
+        SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True),
+    ]
+    # No measured bandwidth yet → router should use the fallback dict value.
+    assert router._bandwidth_for("mps") == pytest.approx(_FALLBACK_TRANSFER_BPS["mps"])
+    # Record a very different measurement; router must now return that, not the fallback.
+    cache.record_bandwidth("mps", 999_999, bytes_sampled=64 * 1024 * 1024)
+    assert router._bandwidth_for("mps") == pytest.approx(999_999)
+
+
+def test_router_init_measures_once_and_caches(monkeypatch, cache):
+    """`auto_measure=True` must measure every non-CPU available backend exactly once; subsequent Routers
+    built against the same cache must NOT re-measure (the cache has it)."""
+
+    calls: list[str] = []
+
+    def fake_measure(device, mb=64):
+        calls.append(device.backend)
+        return 7_777_777_777.0
+
+    monkeypatch.setattr("har.router.measure_bandwidth", fake_measure)
+
+    class FakeInv:
+        value = [
+            SdkDevice(backend="mps", torch_device="mps", name="Apple MPS", available=True),
+            SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True),
+        ]
+
+    monkeypatch.setattr("har.router.list_devices", lambda: FakeInv.value)
+
+    first = Router(cache=cache)
+    assert calls == ["mps"], "first Router init should measure once per non-CPU device"
+    assert cache.get_bandwidth("mps") == pytest.approx(7_777_777_777.0)
+    assert cache.get_bandwidth("cpu") is None, "cpu is not measured — bandwidth is infinite by definition"
+
+    calls.clear()
+    _ = Router(cache=cache)
+    assert calls == [], "second Router with same cache must NOT re-measure"
