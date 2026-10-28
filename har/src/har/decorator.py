@@ -36,42 +36,55 @@ def _get_router() -> Router:
         return _router
 
 
-def offload(fn: Callable[..., Any]) -> Callable[..., Any]:
+def offload(fn: Callable[..., Any] | None = None, *, device: str | None = None) -> Callable[..., Any]:
     """Mark a function as routable: HAR picks the device, runs it, returns the result.
 
-    Usage:
+    Two call styles:
+        @har.offload                        # router picks per the cost model
+        def embed(x): ...
 
-        import har
+        @har.offload(device="gpu")          # prefer CUDA or MPS, else fall back to CPU
+        def embed(x): ...
 
-        @har.offload
-        def embed(x):
-            ...
+    Values accepted for `device`:
+        None, "auto"   — let the router pick per the cost model (default).
+        "cpu"          — always run on CPU.
+        "gpu"          — any accelerator (CUDA, MPS, DirectML, XPU, ROCm); CPU if none.
+        "cuda" / "mps" / "directml" / "xpu" / "rocm"  — pin to that specific backend if it exists.
 
-    First call for a given argument shape measures on the current device and caches the result.
-    Later calls consult the calibration cache and may switch devices, factoring in transfer cost.
+    First call for a given argument shape measures on the chosen device and caches the result.
+    Later calls consult the calibration cache; with no `device=` override the router may switch
+    devices factoring in transfer cost. An explicit `device=` wins over the cost model.
     """
 
-    current_backend = {"backend": "cpu"}
+    def _decorate(real_fn: Callable[..., Any]) -> Callable[..., Any]:
+        current_backend = {"backend": "cpu"}
 
-    @functools.wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        router = _get_router()
-        decision = router.choose(fn, args, kwargs, current_backend["backend"])
-        result, elapsed = run_on(fn, args, kwargs, decision.device)
-        router.record(shape_key(fn, args, kwargs), decision.device.backend, elapsed)
-        current_backend["backend"] = decision.device.backend
-        _last_decisions[f"{fn.__module__}.{fn.__qualname__}"] = OffloadDecision(
-            function=f"{fn.__module__}.{fn.__qualname__}",
-            backend=decision.device.backend,
-            device_name=decision.device.name,
-            reason=decision.reason,
-            elapsed_seconds=elapsed,
-            transfer_bytes=decision.transfer_bytes,
-        )
-        return result
+        @functools.wraps(real_fn)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            router = _get_router()
+            decision = router.choose(real_fn, args, kwargs, current_backend["backend"], prefer=device)
+            result, elapsed = run_on(real_fn, args, kwargs, decision.device)
+            router.record(shape_key(real_fn, args, kwargs), decision.device.backend, elapsed)
+            current_backend["backend"] = decision.device.backend
+            _last_decisions[f"{real_fn.__module__}.{real_fn.__qualname__}"] = OffloadDecision(
+                function=f"{real_fn.__module__}.{real_fn.__qualname__}",
+                backend=decision.device.backend,
+                device_name=decision.device.name,
+                reason=decision.reason,
+                elapsed_seconds=elapsed,
+                transfer_bytes=decision.transfer_bytes,
+            )
+            return result
 
-    wrapper.__har_offload__ = True  # type: ignore[attr-defined]
-    return wrapper
+        wrapper.__har_offload__ = True  # type: ignore[attr-defined]
+        return wrapper
+
+    # `@offload` (bare, no parens): fn is the real function, call _decorate directly.
+    # `@offload(device=...)`: fn is None, return the real decorator for Python to apply.
+    if fn is not None:
+        return _decorate(fn)
+    return _decorate
 
 
 def map(fn: Callable[[Any], Any], items: Iterable[Any]) -> list[Any]:

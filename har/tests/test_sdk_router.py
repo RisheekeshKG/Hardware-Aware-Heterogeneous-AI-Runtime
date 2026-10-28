@@ -7,7 +7,7 @@ import pytest
 
 from har.calibration import CalibrationCache
 from har.inventory import SdkDevice
-from har.router import Router, _FALLBACK_TRANSFER_BPS, shape_key
+from har.router import Router, shape_key
 
 
 @pytest.fixture
@@ -66,17 +66,80 @@ def test_bandwidth_cache_round_trip(cache):
     assert cache.get_bandwidth("cuda") == pytest.approx(15_000_000_000)
 
 
-def test_router_prefers_measured_bandwidth_over_fallback(cache):
+def test_bandwidth_lookup_returns_none_without_measurement(cache):
+    """No fallback guesses: `_bandwidth_for` returns None for an unmeasured non-CPU backend."""
+
+    router = Router(cache=cache, auto_measure=False)
+    router._devices = [SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True)]
+    assert router._bandwidth_for("cuda") is None, "unmeasured backend must return None, not a guess"
+    assert router._bandwidth_for("cpu") == float("inf"), "CPU is always zero-cost by definition"
+    cache.record_bandwidth("cuda", 15_000_000_000, bytes_sampled=64 * 1024 * 1024)
+    assert router._bandwidth_for("cuda") == pytest.approx(15_000_000_000)
+
+
+def test_router_explicit_device_gpu_picks_accelerator(cache):
+    """`@offload(device="gpu")` must route to any available accelerator, ignoring the cost model."""
+
+    router = Router(cache=cache, auto_measure=False)
+    router._devices = [
+        SdkDevice(backend="cuda", torch_device="cuda:0", name="NVIDIA RTX 3050", available=True),
+        SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True),
+    ]
+
+    def fn(x):
+        return x
+
+    import torch
+
+    decision = router.choose(fn, (torch.zeros(8),), {}, current_backend="cpu", prefer="gpu")
+    assert decision.device.backend == "cuda"
+    assert "prefer=gpu" in decision.reason
+
+
+def test_router_explicit_device_cpu_pins_cpu(cache):
+    """`@offload(device="cpu")` must always run on CPU even when a GPU looks cheaper."""
+
     router = Router(cache=cache, auto_measure=False)
     router._devices = [
         SdkDevice(backend="mps", torch_device="mps", name="Apple MPS", available=True),
         SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True),
     ]
-    # No measured bandwidth yet → router should use the fallback dict value.
-    assert router._bandwidth_for("mps") == pytest.approx(_FALLBACK_TRANSFER_BPS["mps"])
-    # Record a very different measurement; router must now return that, not the fallback.
-    cache.record_bandwidth("mps", 999_999, bytes_sampled=64 * 1024 * 1024)
-    assert router._bandwidth_for("mps") == pytest.approx(999_999)
+
+    def fn(x):
+        return x
+
+    import torch
+
+    key = shape_key(fn, (torch.zeros(2048, 2048),), {})
+    cache.record(key, "mps", 0.025)
+    cache.record(key, "cpu", 0.180)
+
+    decision = router.choose(fn, (torch.zeros(2048, 2048),), {}, current_backend="cpu", prefer="cpu")
+    assert decision.device.backend == "cpu", "device=cpu must pin CPU even when MPS wins the cost model"
+
+
+def test_router_no_measured_bandwidth_falls_back_to_cpu(cache):
+    """Without a bandwidth measurement for the cheaper device, the router must NOT guess —
+    it should route to CPU, which has a known zero transfer cost."""
+
+    router = Router(cache=cache, auto_measure=False)
+    router._devices = [
+        SdkDevice(backend="mps", torch_device="mps", name="Apple MPS", available=True),
+        SdkDevice(backend="cpu", torch_device="cpu", name="CPU", available=True),
+    ]
+
+    def fn(x):
+        return x
+
+    import torch
+
+    key = shape_key(fn, (torch.zeros(2048, 2048),), {})
+    # MPS looks cheaper on compute, but we have no measured bandwidth for it.
+    cache.record(key, "mps", 0.025)
+    cache.record(key, "cpu", 0.180)
+
+    decision = router.choose(fn, (torch.zeros(2048, 2048),), {}, current_backend="cpu")
+    assert decision.device.backend == "cpu", "no bandwidth measurement → stay on CPU, don't guess"
 
 
 def test_router_init_measures_once_and_caches(monkeypatch, cache):

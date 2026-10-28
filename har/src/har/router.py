@@ -13,16 +13,9 @@ from .calibration import CalibrationCache
 from .inventory import SdkDevice, devices as list_devices
 
 
-# Last-resort fallback bandwidths, in bytes/sec. Only used when no measurement exists in the
-# calibration cache (first call ever before measurement completes, or a backend added without
-# a probe yet). On any real machine the router prefers the measured value from calibration.db.
-_FALLBACK_TRANSFER_BPS = {
-    "cuda":     12_000_000_000,  # ~12 GB/s PCIe 3/4 effective
-    "mps":      40_000_000_000,  # ~40 GB/s Apple unified memory (very conservative)
-    "directml": 10_000_000_000,  # ~10 GB/s DirectX 12 shared memory
-    "xpu":      25_000_000_000,  # ~25 GB/s Intel Arc PCIe
-    "cpu":      float("inf"),
-}
+# Devices that count as a GPU-class accelerator for `@har.offload(device="gpu")`. CPU is
+# never in this set — the preference "gpu" explicitly means "any accelerator, else CPU."
+_GPU_BACKENDS = {"cuda", "mps", "directml", "xpu", "rocm"}
 
 
 def _sync(torch_device) -> None:
@@ -141,13 +134,35 @@ class Router:
                 # don't crash the router; the fallback dict will cover this backend.
                 pass
 
-    def _bandwidth_for(self, backend: str) -> float:
-        """Measured bytes/sec from the calibration cache, with the fallback dict as a last resort."""
+    def _bandwidth_for(self, backend: str) -> float | None:
+        """Measured bytes/sec for this backend on this machine, or None if we have no measurement.
 
+        No fallback guesses — "I don't know" is a legitimate answer. The caller treats a `None` as
+        "don't route cold cost comparisons here" so CPU stays the safe default when we're unsure.
+        """
+
+        if backend == "cpu":
+            return float("inf")  # data already lives in CPU RAM; transfer is zero
         measured = self.cache.get_bandwidth(backend)
         if measured is not None and measured > 0:
             return measured
-        return _FALLBACK_TRANSFER_BPS.get(backend, 1_000_000_000)
+        return None
+
+    def _cpu_device(self, candidates: list[SdkDevice]) -> SdkDevice:
+        return next((d for d in candidates if d.backend == "cpu"), candidates[-1])
+
+    def _pick_preferred(self, prefer: str, candidates: list[SdkDevice]) -> SdkDevice | None:
+        """Return a device matching the explicit user preference, or None if it isn't available."""
+
+        prefer = prefer.lower()
+        if prefer in {"auto", ""}:
+            return None  # fall through to the cost model
+        if prefer == "cpu":
+            return self._cpu_device(candidates)
+        if prefer == "gpu":
+            return next((d for d in candidates if d.backend in _GPU_BACKENDS), None)
+        # Explicit backend name — must match exactly.
+        return next((d for d in candidates if d.backend == prefer), None)
 
     @property
     def available(self) -> list[SdkDevice]:
@@ -159,6 +174,7 @@ class Router:
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         current_backend: str = "cpu",
+        prefer: str | None = None,
     ) -> RouteDecision:
         key = shape_key(fn, args, kwargs)
         bytes_moved = _tensor_bytes(args) + _tensor_bytes(kwargs)
@@ -167,6 +183,16 @@ class Router:
         # No accelerators present → CPU, no question.
         if len(candidates) == 1:
             return RouteDecision(candidates[0], "only backend available", None, 0)
+
+        # Explicit user preference overrides everything else — this is `@offload(device="gpu")`
+        # style directive from the caller, and the router should honour it instead of guessing.
+        if prefer:
+            picked = self._pick_preferred(prefer, candidates)
+            if picked is not None:
+                moved = bytes_moved if picked.backend != current_backend else 0
+                return RouteDecision(picked, f"user prefer={prefer}", None, moved)
+            # Preference didn't match any available backend. Explicit miss, caller probably has a
+            # typo or the hardware changed; fall through to the cost model as a soft fallback.
 
         measured = self.cache.all_for(key)
         if not measured:
@@ -185,10 +211,21 @@ class Router:
             transfer = 0.0
             if device.backend != current_backend:
                 bandwidth = self._bandwidth_for(device.backend)
-                transfer = bytes_moved / bandwidth if bandwidth else 0.0
+                if bandwidth is None:
+                    # Honest "I don't know." Rather than guessing with a hardcoded number that
+                    # happens to be wrong on half the hardware, we exclude this device from the
+                    # cost comparison. CPU stays as the backstop; the executor will measure
+                    # this backend's bandwidth on the next call via `_ensure_bandwidths`.
+                    continue
+                transfer = bytes_moved / bandwidth
             total = compute + transfer
             if best is None or total < best[1]:
                 best = (device, total)
+
+        if best is None:
+            # No measured bandwidth AND no device matching current_backend had compute — degrade
+            # to CPU rather than guess.
+            return RouteDecision(self._cpu_device(candidates), "no measured bandwidth; defaulting to CPU", None, 0)
 
         chosen, chosen_cost = best
         # Hysteresis: if we're already on another device, only switch when the win is big enough.
