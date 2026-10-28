@@ -7,8 +7,10 @@ from PyInstaller.utils.hooks import collect_submodules
 _har_sdk_imports = collect_submodules('har')
 
 a = Analysis(
-    ['src/har_runtime/desktop_entry.py'],
+    ['src/har/runtime/desktop_entry.py'],
     pathex=['src'],
+    # NOTE: `pyinstaller` must be run from the `har/` directory so these relative
+    # paths resolve.
     binaries=[],
     datas=[],
     hiddenimports=_har_sdk_imports,

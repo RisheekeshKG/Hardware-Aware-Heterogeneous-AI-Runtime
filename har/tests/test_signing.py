@@ -2,7 +2,7 @@
 
 import time
 
-from har_runtime.signing import (
+from har.runtime.signing import (
     HMAC_SIGNATURE_HEADER,
     HMAC_TIMESTAMP_HEADER,
     new_shared_secret,

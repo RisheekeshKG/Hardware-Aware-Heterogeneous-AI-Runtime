@@ -1,7 +1,7 @@
 import json
 
-from har_runtime.benchmark import run_matmul
-from har_runtime.exporters import write_csv, write_json
+from har.runtime.benchmark import run_matmul
+from har.runtime.exporters import write_csv, write_json
 
 
 def test_json_and_csv_exports(tmp_path):

@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 import time
 
-from har_runtime.api import app
+from har.runtime.api import app
 
 
 def test_health_and_device_routes():
@@ -71,7 +71,7 @@ def test_node_can_be_renamed_after_registration():
 
 
 def test_manual_connect_request_accepts_only_worker_url():
-    from har_runtime.api import NodeConnectRequest
+    from har.runtime.api import NodeConnectRequest
 
     request = NodeConnectRequest(worker_url="http://127.0.0.1:9000")
     assert request.name is None

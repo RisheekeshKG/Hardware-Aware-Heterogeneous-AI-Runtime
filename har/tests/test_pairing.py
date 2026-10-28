@@ -1,7 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from har_runtime import api, worker
+from har.runtime import api, worker
 
 HOST_IP = "10.0.0.9"
 JOIN = {"coordinator": f"http://{HOST_IP}:8000", "name": "", "node_id": ""}

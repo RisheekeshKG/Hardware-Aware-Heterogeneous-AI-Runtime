@@ -1,4 +1,4 @@
-from har_runtime.devices import BACKENDS, discover_devices
+from har.runtime.devices import BACKENDS, discover_devices
 
 
 def test_discovery_returns_every_supported_backend():

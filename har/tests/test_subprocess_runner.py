@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from har_runtime.subprocess_runner import run_script_in_subprocess
+from har.runtime.subprocess_runner import run_script_in_subprocess
 
 
 def _run(content: str, *, timeout: float = 5.0):

@@ -132,7 +132,7 @@ def serve(
     configure_host_url(advertise_url)
     if role == "host":
         start_discovery()
-    uvicorn.run("har_runtime.api:app", host=host, port=port, reload=False)
+    uvicorn.run("har.runtime.api:app", host=host, port=port, reload=False)
 
 
 @app.command()
@@ -170,7 +170,7 @@ def worker(
         node_id=node_id,
         allow_connections=allow_connections,
     )
-    uvicorn.run("har_runtime.worker:worker_app", host=host, port=port, reload=False)
+    uvicorn.run("har.runtime.worker:worker_app", host=host, port=port, reload=False)
 
 
 @benchmark_app.command("matmul")

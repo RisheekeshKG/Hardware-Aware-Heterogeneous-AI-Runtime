@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from har_runtime.benchmark import run_matmul, run_workload
-from har_runtime.devices import backend_available
+from har.runtime.benchmark import run_matmul, run_workload
+from har.runtime.devices import backend_available
 
 
 def test_matmul_cpu_is_correct_and_repeatable():

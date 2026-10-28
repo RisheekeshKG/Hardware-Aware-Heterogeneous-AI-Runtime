@@ -1,4 +1,4 @@
-from har_runtime import api, worker
+from har.runtime import api, worker
 
 
 def test_worker_resolves_wildcard_url_without_dropping_port(monkeypatch):

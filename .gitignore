@@ -5,4 +5,26 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+# PyInstaller spec files are tracked explicitly (har/har-runtime-server.spec);
+# this blanket ignore is here to catch any ad-hoc specs generated locally.
 *.spec
+!har/har-runtime-server.spec
+
+# PyInstaller sidecar binaries baked into the Tauri app at build time. These are
+# ~500 MB each and should never land in git — only the running binary needs them.
+desktop/src-tauri/binaries/har-runtime-*
+
+# Tauri shell build artefacts — never tracked.
+desktop/src-tauri/target/
+desktop/src-tauri/runtime/har-runtime-server/
+desktop/dist/
+
+# Frontend build artefacts and installed deps.
+desktop/node_modules/
+
+# macOS Finder metadata.
+.DS_Store
+
+# PyInstaller output for the backend runtime.
+har/build/
+har/dist/

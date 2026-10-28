@@ -1,6 +1,6 @@
 """Tests for env_hash — the fingerprint host and worker exchange to catch mismatched deps."""
 
-from har_runtime.env_hash import env_fingerprint
+from har.runtime.env_hash import env_fingerprint
 
 
 def test_fingerprint_is_deterministic():
@@ -18,7 +18,7 @@ def test_fingerprint_shape():
 
 
 def test_hash_changes_with_versions(monkeypatch):
-    import har_runtime.env_hash as module
+    import har.runtime.env_hash as module
 
     original = module._package_versions
     seen = {"call": 0}

@@ -17,23 +17,18 @@ jobs:
         python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-
-      - name: Install project + test deps
+      - name: Install
+        working-directory: har
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[test]"
-          python -m pip install pytest httpx
-
       - name: Run pytest
+        working-directory: har
         run: python -m pytest tests/ -q
-        # These two bits catch the pieces most likely to drift across platforms:
-        # the subprocess runner (POSIX killpg vs Windows taskkill) and env_hash
-        # (importlib.metadata behavior differs on frozen Windows PyInstaller).
 
   vite-build:
     name: vite build
@@ -44,9 +39,9 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: desktop/package-lock.json
       - name: Build frontend
-        working-directory: web
+        working-directory: desktop
         run: |
           npm ci
           npm run build
@@ -63,12 +58,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: web/src-tauri
+          workspaces: desktop/src-tauri
       - name: Install Linux WebKit deps
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - name: cargo check
-        working-directory: web/src-tauri
+        working-directory: desktop/src-tauri
         run: cargo check --no-default-features
