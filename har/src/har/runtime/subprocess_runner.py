@@ -17,7 +17,9 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,12 +38,18 @@ def run_script_in_subprocess(
     cwd: Path,
     timeout_seconds: float = DEFAULT_SCRIPT_TIMEOUT_SECONDS,
     extra_env: dict[str, str] | None = None,
+    on_chunk: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Run `content` as `cwd/filename` in a fresh Python subprocess.
 
-    Returns `{stdout, stderr, exit_code, timed_out, execute_seconds}` where
-    `execute_seconds` is measured with `time.monotonic()` and is immune to
-    wall-clock drift. On timeout the process group is killed and `timed_out=True`.
+    If `on_chunk(stream, text)` is given, it's invoked as each line (or bounded chunk) of
+    stdout/stderr arrives — this is what lets the UI stream output live instead of the
+    user staring at a blank panel for two minutes while a training script produces output
+    that only gets flushed at exit.
+
+    Returns `{stdout, stderr, exit_code, timed_out, execute_seconds}` where `execute_seconds`
+    is measured with `time.monotonic()`. On timeout the process group is killed and
+    `timed_out=True`.
     """
 
     script_path = cwd / filename
@@ -56,11 +64,17 @@ def run_script_in_subprocess(
     else:
         cmd = [sys.executable, str(script_path), *args]
 
+    env = {**os.environ, **(extra_env or {})}
+    # PYTHONUNBUFFERED forces the child's stdout/stderr to flush per line. Without it,
+    # Python buffers heavily when writing to a pipe (not a TTY), so streaming would see
+    # nothing until the process exits — defeating the whole point.
+    env["PYTHONUNBUFFERED"] = "1"
+
     popen_kwargs: dict[str, Any] = dict(
         cwd=str(cwd),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env={**os.environ, **(extra_env or {})},
+        env=env,
     )
     # Isolate the child in its own process group so SIGTERM/kill-tree reaches
     # anything it spawned (otherwise a bash-launched grandchild would survive).
@@ -81,25 +95,61 @@ def run_script_in_subprocess(
             "execute_seconds": 0.0,
         }
 
+    # One background reader per pipe, so a slow stderr can't backpressure stdout
+    # and vice versa. Each reader appends to its own buffer AND fires on_chunk.
+    stdout_buf: list[str] = []
+    stderr_buf: list[str] = []
+
+    def _reader(stream, name: str, buf: list[str]) -> None:
+        try:
+            for raw in iter(stream.readline, b""):
+                text = raw.decode("utf-8", errors="replace")
+                buf.append(text)
+                if on_chunk is not None:
+                    try:
+                        on_chunk(name, text)
+                    except Exception:
+                        pass  # a buggy sink must not kill the reader
+        finally:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+    threads = [
+        threading.Thread(target=_reader, args=(proc.stdout, "stdout", stdout_buf), daemon=True, name="har-stdout"),
+        threading.Thread(target=_reader, args=(proc.stderr, "stderr", stderr_buf), daemon=True, name="har-stderr"),
+    ]
+    for t in threads:
+        t.start()
+
     timed_out = False
     try:
-        stdout_bytes, stderr_bytes = proc.communicate(timeout=timeout_seconds)
+        proc.wait(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_process_tree(proc.pid)
         try:
-            stdout_bytes, stderr_bytes = proc.communicate(timeout=5)
+            proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            # If communicate still won't return the pipes may already be closed by the kill.
-            stdout_bytes, stderr_bytes = b"", b""
+            pass
+
+    for t in threads:
+        t.join(timeout=3)
     elapsed = time.monotonic() - start
 
-    stdout = stdout_bytes.decode("utf-8", errors="replace")[-_OUTPUT_TAIL_BYTES:]
-    stderr = stderr_bytes.decode("utf-8", errors="replace")[-_OUTPUT_TAIL_BYTES:]
-    if timed_out and stderr and not stderr.endswith("\n"):
-        stderr += "\n"
+    stdout = "".join(stdout_buf)[-_OUTPUT_TAIL_BYTES:]
+    stderr = "".join(stderr_buf)[-_OUTPUT_TAIL_BYTES:]
     if timed_out:
-        stderr += f"[har] Script exceeded {timeout_seconds:g}s and was terminated.\n"
+        if stderr and not stderr.endswith("\n"):
+            stderr += "\n"
+        timeout_note = f"[har] Script exceeded {timeout_seconds:g}s and was terminated.\n"
+        stderr += timeout_note
+        if on_chunk is not None:
+            try:
+                on_chunk("stderr", timeout_note)
+            except Exception:
+                pass
 
     return {
         "stdout": stdout,

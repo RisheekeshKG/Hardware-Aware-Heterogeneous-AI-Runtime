@@ -68,6 +68,21 @@ class WorkerScriptRun:
         self.finished_at: str | None = None
         self.execute_seconds: float | None = None  # monotonic, so skew-free
         self.timed_out: bool = False
+        # Streaming output: same shape as ScriptRecord on the host. The host polls
+        # /worker/scripts/{id}/chunks?since=N to drain these as they arrive.
+        self.chunks: list[dict[str, Any]] = []
+        self._chunks_lock = threading.Lock()
+
+    def append_chunk(self, stream: str, text: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._chunks_lock:
+            seq = len(self.chunks)
+            self.chunks.append({"seq": seq, "stream": stream, "text": text, "at": now})
+            self.output = (self.output + text)[-100_000:]
+
+    def chunks_since(self, since: int) -> list[dict[str, Any]]:
+        with self._chunks_lock:
+            return [c for c in self.chunks if c["seq"] > since]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -294,11 +309,16 @@ def _execute_script(record: WorkerScriptRun) -> None:
                 args=record.request.args,
                 cwd=Path(directory),
                 timeout_seconds=record.request.timeout_seconds or DEFAULT_SCRIPT_TIMEOUT_SECONDS,
+                on_chunk=record.append_chunk,
             )
-            output_parts = [result["stdout"]]
-            if result["stderr"]:
-                output_parts.append(result["stderr"])
-            record.output = "".join(output_parts)[-100_000:]
+            # `output` is populated incrementally by append_chunk; the aggregated
+            # buffer below is only the fallback for scripts that printed nothing
+            # (completed before the pipe threads got a line).
+            if not record.output:
+                output_parts = [result["stdout"]]
+                if result["stderr"]:
+                    output_parts.append(result["stderr"])
+                record.output = "".join(output_parts)[-100_000:]
             record.exit_code = result["exit_code"]
             record.execute_seconds = result["execute_seconds"]
             record.timed_out = bool(result["timed_out"])
@@ -489,6 +509,21 @@ async def worker_script_status(run_id: str, http_request: Request) -> dict[str, 
     if not record:
         raise HTTPException(status_code=404, detail="Worker script run not found")
     return record.to_dict()
+
+
+@worker_app.get("/worker/scripts/{run_id}/chunks")
+async def worker_script_chunks(run_id: str, http_request: Request, since: int = -1) -> dict[str, Any]:
+    """Cursor-based streaming read. Host calls this repeatedly with the latest `seq` it has."""
+
+    await _require_trusted(http_request)
+    record = _worker_script_runs.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Worker script run not found")
+    return {
+        "chunks": record.chunks_since(since),
+        "status": record.status,
+        "exit_code": record.exit_code,
+    }
 
 
 @worker_app.get("/worker/runs/{run_id}")

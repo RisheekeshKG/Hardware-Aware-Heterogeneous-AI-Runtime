@@ -238,6 +238,26 @@ class ScriptRecord:
         self.finished_at: str | None = None  # when it returned (local) or the worker reported done
         self.remote_execute_seconds: float | None = None  # end-to-end on the worker, from its monotonic clock
         self.timed_out: bool = False
+        # Streaming output: each chunk is {seq, stream, text, at}. The SSE endpoint replays
+        # all existing chunks on connect and then pushes new ones as they arrive. `output`
+        # remains the concatenated tail-100k view for clients that just want the final text.
+        self.chunks: list[dict[str, Any]] = []
+        self._chunks_lock = threading.Lock()
+        self._chunks_event = threading.Event()
+
+    def append_chunk(self, stream: str, text: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._chunks_lock:
+            seq = len(self.chunks)
+            self.chunks.append({"seq": seq, "stream": stream, "text": text, "at": now})
+            self.output = (self.output + text)[-100_000:]
+            self.updated_at = now
+        self._chunks_event.set()
+        self._chunks_event.clear()
+
+    def chunks_since(self, since: int) -> list[dict[str, Any]]:
+        with self._chunks_lock:
+            return [c for c in self.chunks if c["seq"] > since]
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -288,13 +308,16 @@ def _run_script_in_process(record: ScriptRecord) -> None:
                 args=record.request.args,
                 cwd=Path(directory),
                 timeout_seconds=record.request.timeout_seconds or _DEFAULT_SCRIPT_TIMEOUT_SECONDS,
+                on_chunk=record.append_chunk,
             )
-            # Combine streams for a single "output" buffer, keeping stderr distinguishable
-            # only when the script actually wrote to it.
-            output_parts = [result["stdout"]]
-            if result["stderr"]:
-                output_parts.append(result["stderr"])
-            record.output = "".join(output_parts)[-100_000:]
+            # `record.output` was already populated incrementally by append_chunk. Fall back
+            # to the aggregated buffer only if streaming produced nothing (very short scripts
+            # that printed less than one flush boundary).
+            if not record.output:
+                output_parts = [result["stdout"]]
+                if result["stderr"]:
+                    output_parts.append(result["stderr"])
+                record.output = "".join(output_parts)[-100_000:]
             record.exit_code = result["exit_code"]
             record.timed_out = bool(result["timed_out"])
             record.remote_execute_seconds = result["execute_seconds"]
@@ -875,13 +898,33 @@ def _run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
             response.raise_for_status()
             worker_run_id = response.json()["id"]
             node["active_job"] = record.id
+            last_chunk_seq = -1
             while True:
+                # Drain any new streamed chunks before polling status, so the UI sees
+                # output continuously flowing even on a long job. The cursor is stored
+                # on the host so a reconnect wouldn't double-stream anything.
+                chunks_url = f"{node['base_url']}/worker/scripts/{worker_run_id}/chunks?since={last_chunk_seq}"
+                try:
+                    chunk_response = client.get(chunks_url, headers=_signed_headers_for(node_id, "GET", chunks_url))
+                    chunk_response.raise_for_status()
+                    chunk_payload = chunk_response.json()
+                    for chunk in chunk_payload.get("chunks", []):
+                        record.append_chunk(chunk["stream"], chunk["text"])
+                        last_chunk_seq = max(last_chunk_seq, chunk.get("seq", last_chunk_seq))
+                except Exception:
+                    # Older workers won't have /chunks. We'll fall back to the aggregated
+                    # `output` from the status poll below, same as before.
+                    pass
+
                 poll_url = f"{node['base_url']}/worker/scripts/{worker_run_id}"
                 worker_response = client.get(poll_url, headers=_signed_headers_for(node_id, "GET", poll_url))
                 worker_response.raise_for_status()
                 worker_record = worker_response.json()
                 record.status = worker_record["status"]
-                record.output = worker_record.get("output", "")
+                # Only overwrite `output` from the status poll if streaming has produced nothing —
+                # otherwise the status poll's aggregated snapshot would stomp on our live chunks.
+                if not record.chunks:
+                    record.output = worker_record.get("output", "")
                 record.error = worker_record.get("error")
                 record.exit_code = worker_record.get("exit_code")
                 if record.status in {"completed", "failed"}:
@@ -924,6 +967,65 @@ def script_status(script_id: str) -> dict[str, Any]:
     if not record:
         raise HTTPException(status_code=404, detail="Script run not found")
     return record.snapshot()
+
+
+@app.get("/api/scripts/{script_id}/chunks")
+def script_chunks(script_id: str, since: int = -1) -> dict[str, Any]:
+    """Cursor-based read of streamed output. `?since=N` returns every chunk with seq > N.
+
+    This is what the host uses to pull incrementally from a remote worker, and it also
+    serves as the fallback for UI contexts that can't open an SSE connection.
+    """
+
+    record = _script_runs.get(script_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Script run not found")
+    return {
+        "script_id": script_id,
+        "chunks": record.chunks_since(since),
+        "status": record.status,
+        "exit_code": record.exit_code,
+    }
+
+
+@app.get("/api/scripts/{script_id}/stream")
+async def script_stream(script_id: str):
+    """Server-Sent Events: pushes each new output chunk as it lands, then a terminal 'done'.
+
+    The user-facing win: a 2-minute training script no longer sits as a blank panel. Output
+    scrolls as it's produced, and the final `done` event carries exit_code + status so the
+    client can stop listening cleanly without a separate HTTP call.
+    """
+
+    import json as _json
+
+    from fastapi.responses import StreamingResponse
+
+    record = _script_runs.get(script_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Script run not found")
+
+    async def generate():
+        last_seq = -1
+        while True:
+            chunks = record.chunks_since(last_seq)
+            for chunk in chunks:
+                yield f"data: {_json.dumps(chunk)}\n\n"
+                last_seq = chunk["seq"]
+            if record.status in {"completed", "failed"}:
+                # Give the pipe reader threads a last chance to flush before saying done.
+                final = record.chunks_since(last_seq)
+                for chunk in final:
+                    yield f"data: {_json.dumps(chunk)}\n\n"
+                    last_seq = chunk["seq"]
+                yield f"event: done\ndata: {_json.dumps({'status': record.status, 'exit_code': record.exit_code, 'timed_out': record.timed_out})}\n\n"
+                return
+            # Keep the connection alive while we wait for more; comment lines are SSE heartbeats
+            # that proxies won't mistake for a dead stream.
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(0.2)
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 _IDEMPOTENCY_WINDOW_SECONDS = 300.0

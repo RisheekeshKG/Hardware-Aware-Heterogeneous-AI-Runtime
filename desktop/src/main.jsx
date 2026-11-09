@@ -697,9 +697,40 @@ function backendLineLabel(backend, cpuInfo) {
   if (backend?.backend === 'cpu') return cpuLabel(backend, cpuInfo)
   return backend?.device_name || friendlyBackend(backend?.backend)
 }
+function useScriptStream(scriptId, scriptStatus) {
+  // Live tail of /api/scripts/{id}/stream via EventSource. Each chunk is appended as it arrives,
+  // so a 2-minute training script no longer shows a blank panel. We close the stream when the
+  // server sends the terminal `done` event, when the component unmounts, or when the script
+  // transitions to completed/failed via the polled snapshot (defence against SSE hangs).
+  const [chunks, setChunks] = useState([])
+  const outputRef = useRef('')
+  useEffect(() => {
+    outputRef.current = ''
+    setChunks([])
+    if (!scriptId) return undefined
+    let closed = false
+    const es = new EventSource(`${API}/api/scripts/${scriptId}/stream`)
+    es.onmessage = (event) => {
+      try {
+        const chunk = JSON.parse(event.data)
+        if (typeof chunk.text === 'string') {
+          outputRef.current = (outputRef.current + chunk.text).slice(-100_000)
+          setChunks((prev) => [...prev, chunk])
+        }
+      } catch { /* ignore keep-alive and malformed frames */ }
+    }
+    es.addEventListener('done', () => { closed = true; es.close() })
+    es.onerror = () => { if (!closed) es.close() }
+    return () => { closed = true; es.close() }
+  }, [scriptId])
+  return { chunks, liveOutput: outputRef.current }
+}
+
 function ScriptDetail({ script, onClose, onRefresh, devices, nodes, cpuInfo }) {
   const elapsed = scriptElapsed(script)
-  const hasOutput = Boolean(script.output && script.output.length)
+  const { liveOutput } = useScriptStream(script.id, script.status)
+  const output = liveOutput || script.output || ''
+  const hasOutput = Boolean(output && output.length)
   const machine = targetMachine(script, devices, nodes)
   const isLocal = script.target_node === 'local'
   const machineCpuInfo = isLocal ? cpuInfo : null
@@ -718,8 +749,8 @@ function ScriptDetail({ script, onClose, onRefresh, devices, nodes, cpuInfo }) {
     {machine && machine.backends.length ? <div className="hardware-block"><div className="hardware-head"><span className="eyebrow">HARDWARE AVAILABLE ON TARGET</span>{machine.status && machine.status !== 'online' ? <StatusBadge status={machine.status} /> : null}</div><div className="hardware-list">{machine.backends.filter((b) => b.available !== false).map((backend) => <div className="hardware-row" key={backend.backend}><BackendBadge backend={backend.backend} /><div><strong>{backendLineLabel(backend, machineCpuInfo)}</strong><span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free / ${formatBytes(backend.memory.total_bytes)}` : (backend.memory?.unavailable_reason || 'Memory unavailable')}</span></div></div>)}</div><div className="policy-note"><span className="status-dot preview" /><span>The script picks which of these to use at runtime. HAR shows every backend available on the target.</span></div></div> : null}
     {script.args?.length ? <div className="script-args"><span className="eyebrow">ARGUMENTS</span><code>{script.args.join(' ')}</code></div> : null}
     {script.error ? <div className="form-error" style={{ marginTop: 14 }}>{script.error}</div> : null}
-    <div className="script-output-head"><span className="eyebrow">OUTPUT (STDOUT + STDERR)</span><span>{hasOutput ? `${script.output.length} chars` : (script.status === 'running' ? 'Buffered until exit' : 'No output')}</span></div>
-    <pre className="script-output">{hasOutput ? script.output : (script.status === 'running' ? 'Waiting for the script to finish. Output will appear here when it exits.' : (script.status === 'failed' ? (script.error || 'Script failed with no output.') : 'No output.'))}</pre>
+    <div className="script-output-head"><span className="eyebrow">OUTPUT (STDOUT + STDERR)</span><span>{hasOutput ? `${output.length} chars${script.status === 'running' ? ' — streaming' : ''}` : (script.status === 'running' ? 'Waiting for the script to produce output...' : 'No output')}</span></div>
+    <pre className="script-output">{hasOutput ? output : (script.status === 'running' ? 'Script is starting. Output will stream here as it is produced.' : (script.status === 'failed' ? (script.error || 'Script failed with no output.') : 'No output.'))}</pre>
   </section>
 }
 function DeviceCard({ device, onDisconnect }) {
