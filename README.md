@@ -347,6 +347,15 @@ frozen PyInstaller bundles).
 
 ---
 
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HAR_IDLE_TIMEOUT_SECONDS` | `3600` (1 hour) | Host API and worker service exit via SIGTERM if there are no HTTP requests (excluding `/health`) and no running jobs for this many seconds. Prevents orphan processes from pinning ports 8000 / 9000 forever. Set to `0` to disable (useful for workers that should always stay alive). |
+| `HAR_CORS_ORIGINS` | Tauri + localhost | Comma-separated allowed origins for the host API. Defaults to the Vite dev server and the Tauri webview. |
+| `HAR_CALIBRATION_DB` | `~/.har/calibration.db` | SQLite file holding per-shape latency measurements and per-backend measured bandwidths. Blow it away to reset the router's memory. |
+| `HAR_HOME` | `~/.har` | Overrides the base directory for HAR's state files (calibration DB, per-worker trusted hosts, etc.). |
+
 ## Networking summary
 
 | Protocol | Port | Scope | Purpose |

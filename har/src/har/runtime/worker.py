@@ -95,6 +95,23 @@ worker_app = FastAPI(title="Hardware-Aware AI Runtime Worker", version="0.2.0")
 _worker_runs: dict[str, WorkerRun] = {}
 _worker_script_runs: dict[str, WorkerScriptRun] = {}
 _worker_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="har-worker")
+
+
+def _worker_has_active_work() -> bool:
+    """Any queued/running job here means the host still needs us. Block idle shutdown."""
+
+    for run in _worker_runs.values():
+        if run.status in {"queued", "running"}:
+            return True
+    for script in _worker_script_runs.values():
+        if script.status in {"queued", "running"}:
+            return True
+    return False
+
+
+from .idle_shutdown import install as _install_idle_watchdog  # noqa: E402
+
+_idle_watchdog = _install_idle_watchdog(worker_app, has_active_work=_worker_has_active_work)
 _worker_config: dict[str, Any] = {}
 _state_dir = Path.home() / ".har-runtime"
 _node_id_path = _state_dir / "node-id"

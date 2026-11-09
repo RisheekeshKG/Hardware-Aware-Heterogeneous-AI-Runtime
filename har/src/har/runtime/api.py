@@ -207,6 +207,23 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark"
 _script_runs: dict[str, "ScriptRecord"] = {}
 
 
+def _host_has_active_work() -> bool:
+    """Any queued/running benchmark or script = the server is still useful. Block idle shutdown."""
+
+    for run in _runs.values():
+        if run.status in {"queued", "running"}:
+            return True
+    for script in _script_runs.values():
+        if script.status in {"queued", "running"}:
+            return True
+    return False
+
+
+from .idle_shutdown import install as _install_idle_watchdog  # noqa: E402
+
+_idle_watchdog = _install_idle_watchdog(app, has_active_work=_host_has_active_work)
+
+
 class ScriptRecord:
     def __init__(self, request: ScriptRunRequest) -> None:
         self.id = uuid.uuid4().hex[:12]
