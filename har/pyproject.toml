@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "har"
-version = "1.0.0"
+version = "1.1.0"
 description = "Hardware-Aware Runtime: @har.offload decorator plus host/worker services that route Python work across CPU, Apple MPS, and NVIDIA CUDA on your personal LAN."
 requires-python = ">=3.10"
 dependencies = [

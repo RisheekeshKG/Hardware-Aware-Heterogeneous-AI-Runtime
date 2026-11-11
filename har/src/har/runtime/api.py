@@ -219,9 +219,38 @@ def _host_has_active_work() -> bool:
     return False
 
 
+from .graceful_shutdown import install as _install_graceful_shutdown, on_shutdown as _on_shutdown  # noqa: E402
 from .idle_shutdown import install as _install_idle_watchdog  # noqa: E402
+from .rate_limit import install as _install_rate_limiter  # noqa: E402
 
 _idle_watchdog = _install_idle_watchdog(app, has_active_work=_host_has_active_work)
+_rate_limiter = _install_rate_limiter(app, limited_paths=["/api/scripts", "/api/runs"])
+
+
+def _mark_host_inflight_failed() -> None:
+    """Flip every queued/running record to failed when the server is shutting down.
+
+    Without this, the UI's history would show scripts stuck in `running` forever after a
+    SIGTERM — the subprocess is long gone but the status was never updated.
+    """
+
+    now = datetime.now(timezone.utc).isoformat()
+    for run in _runs.values():
+        if run.status in {"queued", "running"}:
+            run.status = "failed"
+            run.error = "Server received a shutdown signal while this run was in flight"
+            run.updated_at = now
+    for script in _script_runs.values():
+        if script.status in {"queued", "running"}:
+            script.status = "failed"
+            script.error = "Server received a shutdown signal while this script was in flight"
+            script.updated_at = now
+            if script.finished_at is None:
+                script.finished_at = now
+
+
+_on_shutdown(_mark_host_inflight_failed)
+_install_graceful_shutdown(app)
 
 
 class ScriptRecord:

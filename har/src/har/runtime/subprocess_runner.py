@@ -29,6 +29,35 @@ import psutil
 DEFAULT_SCRIPT_TIMEOUT_SECONDS = 600  # 10 minutes; override per-request via ScriptRunRequest.timeout_seconds.
 _OUTPUT_TAIL_BYTES = 100_000
 
+# Registry of PIDs we've spawned and haven't reaped yet. Used by the graceful shutdown
+# handler: when the server receives SIGTERM, we walk this set and tear down every
+# in-flight script tree so nothing leaks after the parent exits.
+_live_processes: set[int] = set()
+_live_processes_lock = threading.Lock()
+
+
+def _track_process(pid: int) -> None:
+    with _live_processes_lock:
+        _live_processes.add(pid)
+
+
+def _untrack_process(pid: int) -> None:
+    with _live_processes_lock:
+        _live_processes.discard(pid)
+
+
+def kill_all_tracked() -> list[int]:
+    """Kill every subprocess that's currently running under us. Returns the PIDs we hit."""
+
+    with _live_processes_lock:
+        pids = list(_live_processes)
+    for pid in pids:
+        try:
+            _kill_process_tree(pid)
+        except Exception:
+            pass  # best-effort; the caller only needs to know we tried
+    return pids
+
 
 def run_script_in_subprocess(
     *,
@@ -94,6 +123,7 @@ def run_script_in_subprocess(
             "timed_out": False,
             "execute_seconds": 0.0,
         }
+    _track_process(proc.pid)
 
     # One background reader per pipe, so a slow stderr can't backpressure stdout
     # and vice versa. Each reader appends to its own buffer AND fires on_chunk.
@@ -136,6 +166,7 @@ def run_script_in_subprocess(
 
     for t in threads:
         t.join(timeout=3)
+    _untrack_process(proc.pid)
     elapsed = time.monotonic() - start
 
     stdout = "".join(stdout_buf)[-_OUTPUT_TAIL_BYTES:]

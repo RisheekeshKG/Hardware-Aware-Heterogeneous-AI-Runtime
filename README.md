@@ -351,10 +351,17 @@ frozen PyInstaller bundles).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `HAR_IDLE_TIMEOUT_SECONDS` | `3600` (1 hour) | Host API and worker service exit via SIGTERM if there are no HTTP requests (excluding `/health`) and no running jobs for this many seconds. Prevents orphan processes from pinning ports 8000 / 9000 forever. Set to `0` to disable (useful for workers that should always stay alive). |
+| `HAR_IDLE_TIMEOUT_SECONDS` | `3600` (1 hour) | Host API and worker service exit via SIGTERM if there are no HTTP requests (excluding `/health`) and no running jobs for this many seconds. Prevents orphan processes from pinning ports 8000 / 9000 forever. Set to `0` to disable. |
+| `HAR_RATE_LIMIT_PER_MIN` | `10` | Per-source-IP rate limit on job submission endpoints (`POST /api/scripts`, `POST /api/runs`, and the worker equivalents). Over the limit → `429 Too Many Requests` with `Retry-After`. Set to `0` to disable. |
+| `HAR_RATE_LIMIT_WINDOW_SECONDS` | `60` | Sliding window the rate limiter counts across. |
 | `HAR_CORS_ORIGINS` | Tauri + localhost | Comma-separated allowed origins for the host API. Defaults to the Vite dev server and the Tauri webview. |
 | `HAR_CALIBRATION_DB` | `~/.har/calibration.db` | SQLite file holding per-shape latency measurements and per-backend measured bandwidths. Blow it away to reset the router's memory. |
 | `HAR_HOME` | `~/.har` | Overrides the base directory for HAR's state files (calibration DB, per-worker trusted hosts, etc.). |
+
+On SIGTERM (triggered either by the idle watchdog, the OS, or a `kill` from a terminal) the
+server marks every queued / running job as failed with a clear reason, kills any tracked
+subprocess trees, and lets uvicorn drain in-flight HTTP connections normally. No orphan
+`python` processes and no "scripts stuck running" entries in the UI history.
 
 ## Networking summary
 

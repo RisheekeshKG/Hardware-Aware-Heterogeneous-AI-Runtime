@@ -124,9 +124,32 @@ def _worker_has_active_work() -> bool:
     return False
 
 
+from .graceful_shutdown import install as _install_graceful_shutdown, on_shutdown as _on_shutdown  # noqa: E402
 from .idle_shutdown import install as _install_idle_watchdog  # noqa: E402
+from .rate_limit import install as _install_rate_limiter  # noqa: E402
 
 _idle_watchdog = _install_idle_watchdog(worker_app, has_active_work=_worker_has_active_work)
+_rate_limiter = _install_rate_limiter(worker_app, limited_paths=["/worker/scripts", "/worker/runs"])
+
+
+def _mark_worker_inflight_failed() -> None:
+    """Match the host-side cleanup: queued/running → failed with a shutdown-reason error."""
+
+    now = datetime.now(timezone.utc).isoformat()
+    for run in _worker_runs.values():
+        if run.status in {"queued", "running"}:
+            run.status = "failed"
+            run.error = "Worker received a shutdown signal while this run was in flight"
+    for script in _worker_script_runs.values():
+        if script.status in {"queued", "running"}:
+            script.status = "failed"
+            script.error = "Worker received a shutdown signal while this script was in flight"
+            if script.finished_at is None:
+                script.finished_at = now
+
+
+_on_shutdown(_mark_worker_inflight_failed)
+_install_graceful_shutdown(worker_app)
 _worker_config: dict[str, Any] = {}
 _state_dir = Path.home() / ".har-runtime"
 _node_id_path = _state_dir / "node-id"
