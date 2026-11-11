@@ -26,8 +26,8 @@ gpu-metrics = ["nvidia-ml-py>=12.0"]
 har = "har.runtime.cli:app"
 
 [tool.setuptools.packages.find]
-where = ["src"]
 include = ["har*"]
+exclude = ["tests*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

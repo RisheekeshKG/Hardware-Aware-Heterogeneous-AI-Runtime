@@ -31,8 +31,8 @@ for _pkg in _env_hash_packages:
         pass
 
 a = Analysis(
-    ['src/har/runtime/desktop_entry.py'],
-    pathex=['src'],
+    ['har/runtime/desktop_entry.py'],
+    pathex=['.'],
     # NOTE: `pyinstaller` must be run from the `har/` directory so these relative
     # paths resolve.
     binaries=[],

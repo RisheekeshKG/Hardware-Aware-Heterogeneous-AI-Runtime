@@ -386,7 +386,7 @@ HAR-Runtime/
 ├── har/                              # pip install har — the whole Python package
 │   ├── pyproject.toml                #   name = "har"
 │   ├── har-runtime-server.spec       # PyInstaller spec for the desktop bundle
-│   ├── src/har/
+│   ├── har/
 │   │   ├── __init__.py               # public SDK: offload, devices, map, where_did_it_run
 │   │   ├── decorator.py              # @offload wrapper + decision log
 │   │   ├── router.py                 # cost model + hysteresis + per-shape key
