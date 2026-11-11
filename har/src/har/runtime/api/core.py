@@ -24,7 +24,7 @@ from ..idle_shutdown import install as _install_idle_watchdog
 from ..rate_limit import install as _install_rate_limiter
 
 if TYPE_CHECKING:
-    from .models import RunRecord, ScriptRecord
+    from .schemas import RunRecord, ScriptRecord
 
 
 app = FastAPI(title="Hardware-Aware AI Runtime API", version="0.2.0")

@@ -150,9 +150,9 @@ def test_host_disconnect_stops_worker(connection, monkeypatch, tmp_path):
 
 
 def test_disconnected_node_cannot_reregister():
-    # The shared state dicts live in api._core and endpoint modules bind to them at
+    # The shared state dicts live in api.core and endpoint modules bind to them at
     # import time, so we mutate in place (clear + restore) rather than rebind.
-    from har.runtime.api import _core as _api_core
+    from har.runtime.api import core as _api_core
 
     saved_nodes = dict(_api_core._nodes)
     saved_disconnected = set(_api_core._disconnected_nodes)

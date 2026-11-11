@@ -9,7 +9,7 @@ from typing import Any
 
 from fastapi import HTTPException
 
-from ._core import (
+from .core import (
     _disconnected_nodes,
     _discovery_registry,
     _node_secrets,
@@ -19,8 +19,8 @@ from ._core import (
     _session,
     app,
 )
-from ._helpers import CONNECT_APPROVAL_TIMEOUT_SECONDS, _normalize_worker_url
-from .models import DiscoveryConnectRequest, NodeConnectRequest, NodeHeartbeat, NodeRegistration, NodeRenameRequest
+from .auth import CONNECT_APPROVAL_TIMEOUT_SECONDS, _normalize_worker_url
+from .schemas import DiscoveryConnectRequest, NodeConnectRequest, NodeHeartbeat, NodeRegistration, NodeRenameRequest
 
 
 @app.post("/api/nodes/register")

@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ..benchmark import run_workload
-from ._helpers import _signed_headers_for
-from .models import RunRecord, ScriptRecord
+from .auth import _signed_headers_for
+from .schemas import RunRecord, ScriptRecord
 
 
 def run_benchmark(record: RunRecord) -> None:

@@ -6,8 +6,8 @@ from typing import Any, Literal
 
 from fastapi import HTTPException
 
-from ._core import _session, app
-from ._helpers import _local_worker_url
+from .core import _session, app
+from .auth import _local_worker_url
 
 
 @app.get("/api/pairing")

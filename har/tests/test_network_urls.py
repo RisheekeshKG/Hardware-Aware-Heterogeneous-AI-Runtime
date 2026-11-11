@@ -1,5 +1,5 @@
 from har.runtime import api, worker
-from har.runtime.api import _core as _api_core
+from har.runtime.api import core as _api_core
 
 
 def test_worker_resolves_wildcard_url_without_dropping_port(monkeypatch):
@@ -9,7 +9,7 @@ def test_worker_resolves_wildcard_url_without_dropping_port(monkeypatch):
 
 
 def test_host_resolves_wildcard_url_without_dropping_port(monkeypatch):
-    # configure_host_url mutates the shared _session dict inside api._core; monkeypatch
+    # configure_host_url mutates the shared _session dict inside api.core; monkeypatch
     # the attribute there so the production code sees our fresh dict.
     monkeypatch.setattr(_api_core, "_session", {"host_url": None})
 

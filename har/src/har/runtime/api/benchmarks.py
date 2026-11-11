@@ -8,9 +8,9 @@ from typing import Any
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 
 from ..devices import get_device_info
-from ._core import LOOPBACK_CLIENTS, _executor, _nodes, _runs, app
-from ._runners import run_benchmark, run_remote_benchmark
-from .models import MatmulRunRequest, RunRecord
+from .core import LOOPBACK_CLIENTS, _executor, _nodes, _runs, app
+from .jobs import run_benchmark, run_remote_benchmark
+from .schemas import MatmulRunRequest, RunRecord
 
 
 @app.get("/api/runs")

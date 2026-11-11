@@ -8,8 +8,8 @@ from typing import Any
 from fastapi import HTTPException
 
 from ..devices import discover_devices, system_info
-from ._core import _nodes, _runs, _session, app
-from ._helpers import _signed_headers_for
+from .core import _nodes, _runs, _session, app
+from .auth import _signed_headers_for
 
 
 @app.get("/api/health")
@@ -86,7 +86,7 @@ def runtime_role() -> dict[str, str]:
 def runtime_snapshot() -> dict[str, Any]:
     """Return the live state needed by the desktop runtime console."""
 
-    # Local import avoids a cycle with api.nodes (which imports from _core).
+    # Local import avoids a cycle with api.nodes (which imports from app).
     from .nodes import nodes as _list_nodes
 
     visible_nodes = _list_nodes()

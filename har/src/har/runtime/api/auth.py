@@ -7,7 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 
-from ._core import _node_secrets
+from .core import _node_secrets
 
 
 CONNECT_APPROVAL_TIMEOUT_SECONDS = 120.0
