@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
+from ._torch import TORCH_AVAILABLE, torch
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,11 @@ def devices() -> list[SdkDevice]:
     """
 
     found: list[SdkDevice] = []
+    if not TORCH_AVAILABLE:
+        # The SDK is useless without torch, but surface the state instead of crashing
+        # so callers (and the UI) can show a "run setup" prompt.
+        found.append(SdkDevice(backend="cpu", torch_device="cpu", name="CPU (PyTorch not installed)", available=False))
+        return found
     if torch.cuda.is_available():
         try:
             name = torch.cuda.get_device_name(0)

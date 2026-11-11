@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-import torch
+from ._torch import require_torch, torch
 
 from .calibration import CalibrationCache
 from .inventory import SdkDevice, devices as list_devices
@@ -20,8 +20,6 @@ _GPU_BACKENDS = {"cuda", "mps", "directml", "xpu", "rocm"}
 
 def _sync(torch_device) -> None:
     """Backend-aware barrier so bandwidth timing isn't short-circuited by asynchronous queueing."""
-
-    import torch
 
     if torch_device.type == "cuda":
         torch.cuda.synchronize()
@@ -37,7 +35,7 @@ def measure_bandwidth(device: SdkDevice, mb: int = 64) -> float:
     table so subsequent process starts don't re-pay the measurement.
     """
 
-    import torch
+    require_torch()
 
     if device.backend == "cpu":
         return float("inf")

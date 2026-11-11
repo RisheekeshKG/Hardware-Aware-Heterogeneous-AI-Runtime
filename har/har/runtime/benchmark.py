@@ -5,9 +5,9 @@ from __future__ import annotations
 import statistics
 import time
 from collections.abc import Callable
+from typing import Any
 
-import torch
-from torch import nn
+from .._torch import require_torch, torch
 
 from .devices import get_device_info, synchronize
 from .models import BenchmarkResult
@@ -36,7 +36,7 @@ def run_matmul(
     warmup_iterations: int = 3,
     measured_iterations: int = 10,
     seed: int = 42,
-    dtype: torch.dtype = torch.float32,
+    dtype: Any = None,
     atol: float = 1e-3,
     rtol: float = 1e-3,
     progress_callback: Callable[[int, int, float], None] | None = None,
@@ -48,6 +48,9 @@ def run_matmul(
     if warmup_iterations < 0 or measured_iterations <= 0:
         raise ValueError("warmup_iterations must be non-negative and measured_iterations must be positive")
 
+    require_torch()
+    if dtype is None:
+        dtype = torch.float32
     device_info = get_device_info(backend)
     device = torch.device(device_info.torch_device)
     generator = torch.Generator(device="cpu")
@@ -101,20 +104,32 @@ def run_matmul(
     )
 
 
-class _DeterministicImageModel(nn.Module):
-    def __init__(self) -> None:
-        super().__init__()
-        self.features = nn.Sequential(
-            nn.Conv2d(3, 8, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
-        self.classifier = nn.Linear(16, 10)
+def _build_image_model():
+    """Build the CNN lazily so this module imports without torch installed.
 
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return self.classifier(self.features(inputs).flatten(1))
+    `class X(nn.Module)` evaluates `nn.Module` at class-definition (import) time,
+    so we can't put the class at module scope while keeping benchmark.py importable
+    without torch. Wrapping it in a factory defers evaluation to first use.
+    """
+
+    from torch import nn
+
+    class _DeterministicImageModel(nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.features = nn.Sequential(
+                nn.Conv2d(3, 8, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.Conv2d(8, 16, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveAvgPool2d((1, 1)),
+            )
+            self.classifier = nn.Linear(16, 10)
+
+        def forward(self, inputs):
+            return self.classifier(self.features(inputs).flatten(1))
+
+    return _DeterministicImageModel
 
 
 def run_image_inference(
@@ -131,15 +146,17 @@ def run_image_inference(
 
     if batch_size <= 0 or image_size <= 0:
         raise ValueError("batch_size and image_size must be greater than zero")
+    require_torch()
     device_info = get_device_info(backend)
     device = torch.device(device_info.torch_device)
     generator = torch.Generator(device="cpu")
     generator.manual_seed(seed)
     inputs_cpu = torch.randn((batch_size, 3, image_size, image_size), generator=generator)
+    ImageModel = _build_image_model()
     with torch.random.fork_rng(devices=[]):
         torch.manual_seed(seed)
-        model_cpu = _DeterministicImageModel().eval()
-    model = _DeterministicImageModel().eval()
+        model_cpu = ImageModel().eval()
+    model = ImageModel().eval()
     model.load_state_dict(model_cpu.state_dict())
     model.to(device)
     inputs = inputs_cpu.to(device)
@@ -198,6 +215,7 @@ def run_tree_traversal(
 
     if depth <= 0 or depth > 20 or traversal_count <= 0:
         raise ValueError("depth must be 1..20 and traversal_count must be greater than zero")
+    require_torch()
     device_info = get_device_info(backend)
     device = torch.device(device_info.torch_device)
     generator = torch.Generator(device="cpu")
@@ -208,7 +226,7 @@ def run_tree_traversal(
     paths = paths_cpu.to(device)
     values = values_cpu.to(device)
 
-    def traverse(path_tensor: torch.Tensor, value_tensor: torch.Tensor) -> torch.Tensor:
+    def traverse(path_tensor, value_tensor):
         indices = torch.zeros(path_tensor.shape[0], dtype=torch.int64, device=path_tensor.device)
         for level in range(depth):
             indices = indices * 2 + path_tensor[:, level] + 1

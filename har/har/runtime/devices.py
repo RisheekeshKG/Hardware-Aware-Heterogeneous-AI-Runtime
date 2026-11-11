@@ -9,8 +9,8 @@ import sys
 from collections.abc import Callable
 
 import psutil
-import torch
 
+from .._torch import TORCH_AVAILABLE, require_torch, torch
 from .models import DeviceInfo, MemoryMeasurement
 
 BACKENDS = ("cpu", "mps", "cuda")
@@ -47,9 +47,9 @@ def system_info() -> dict[str, object]:
         },
         "runtime": {
             "python_version": sys.version.split()[0],
-            "pytorch_version": torch.__version__,
-            "cuda_runtime": torch.version.cuda,
-            "mps_built": bool(torch.backends.mps.is_built()),
+            "pytorch_version": torch.__version__ if TORCH_AVAILABLE else None,
+            "cuda_runtime": torch.version.cuda if TORCH_AVAILABLE else None,
+            "mps_built": bool(torch.backends.mps.is_built()) if TORCH_AVAILABLE else False,
         },
     }
 
@@ -66,6 +66,8 @@ def _system_memory() -> MemoryMeasurement:
 
 
 def _cuda_memory() -> MemoryMeasurement:
+    if not TORCH_AVAILABLE:
+        return MemoryMeasurement(None, None, "unavailable", False, False, "PyTorch is not installed")
     if not torch.cuda.is_available():
         return MemoryMeasurement(None, None, "unavailable", False, False, "CUDA is not available")
     try:
@@ -76,6 +78,8 @@ def _cuda_memory() -> MemoryMeasurement:
 
 
 def _mps_memory() -> MemoryMeasurement:
+    if not TORCH_AVAILABLE:
+        return MemoryMeasurement(None, None, "unavailable", False, False, "PyTorch is not installed")
     if not torch.backends.mps.is_available():
         return MemoryMeasurement(None, None, "unavailable", False, False, "MPS is not available")
     # MPS exposes an allocator estimate, not a direct free-memory measurement.
@@ -131,10 +135,10 @@ def _cpu_info() -> DeviceInfo:
     brand = _cpu_brand()
     return DeviceInfo(
         backend="cpu",
-        available=True,
+        available=TORCH_AVAILABLE,
         device_name=brand,
         torch_device="cpu",
-        torch_version=torch.__version__,
+        torch_version=torch.__version__ if TORCH_AVAILABLE else "not-installed",
         details={
             "platform": platform.platform(),
             "python_version": sys.version.split()[0],
@@ -145,10 +149,22 @@ def _cpu_info() -> DeviceInfo:
             "frequency_ghz": frequency_ghz,
         },
         memory=_system_memory(),
+        unavailable_reason=None if TORCH_AVAILABLE else "PyTorch is not installed yet — run first-time setup",
     )
 
 
 def _mps_info() -> DeviceInfo:
+    if not TORCH_AVAILABLE:
+        return DeviceInfo(
+            backend="mps",
+            available=False,
+            device_name="Apple Metal Performance Shaders",
+            torch_device="mps",
+            torch_version="not-installed",
+            details={"built": False},
+            memory=_unavailable_memory("PyTorch is not installed"),
+            unavailable_reason="PyTorch is not installed yet — run first-time setup",
+        )
     available = bool(torch.backends.mps.is_available())
     reason = None if available else "PyTorch MPS backend is unavailable on this host"
     return DeviceInfo(
@@ -164,6 +180,17 @@ def _mps_info() -> DeviceInfo:
 
 
 def _cuda_info() -> DeviceInfo:
+    if not TORCH_AVAILABLE:
+        return DeviceInfo(
+            backend="cuda",
+            available=False,
+            device_name="NVIDIA CUDA",
+            torch_device="cuda:0",
+            torch_version="not-installed",
+            details={"device_count": 0, "torch_cuda_version": None, "cuda_visible_devices": os.getenv("CUDA_VISIBLE_DEVICES")},
+            memory=_unavailable_memory("PyTorch is not installed"),
+            unavailable_reason="PyTorch is not installed yet — run first-time setup",
+        )
     cuda_runtime = torch.version.cuda
     details: dict[str, object] = {
         "device_count": 0,
@@ -224,17 +251,20 @@ def get_device_info(backend: str) -> DeviceInfo:
     return info
 
 
-def torch_device(backend: str) -> torch.device:
-    return torch.device(get_device_info(backend).torch_device)
+def torch_device(backend: str):
+    t = require_torch()
+    return t.device(get_device_info(backend).torch_device)
 
 
 def synchronize(backend: str) -> None:
     """Complete queued work before a timing boundary."""
 
-    if backend == "cuda":
-        torch.cuda.synchronize()
-    elif backend == "mps":
-        torch.mps.synchronize()
+    if backend in ("cuda", "mps"):
+        t = require_torch()
+        if backend == "cuda":
+            t.cuda.synchronize()
+        else:
+            t.mps.synchronize()
 
 
 def backend_available(backend: str) -> bool:

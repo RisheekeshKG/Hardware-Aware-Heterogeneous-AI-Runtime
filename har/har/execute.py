@@ -5,12 +5,13 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-import torch
+from ._torch import require_torch, torch
 
 from .inventory import SdkDevice
 
 
-def _move(obj: Any, device: torch.device) -> Any:
+def _move(obj: Any, device) -> Any:
+    require_torch()
     if isinstance(obj, torch.Tensor):
         return obj if obj.device == device else obj.to(device)
     if isinstance(obj, list):
@@ -22,7 +23,7 @@ def _move(obj: Any, device: torch.device) -> Any:
     return obj
 
 
-def _synchronize(device: torch.device) -> None:
+def _synchronize(device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize()
     elif device.type == "mps":
@@ -41,6 +42,7 @@ def run_on(
     router's transfer-cost model instead.
     """
 
+    require_torch()
     torch_device = torch.device(sdk_device.torch_device)
     moved_args = tuple(_move(arg, torch_device) for arg in args)
     moved_kwargs = {key: _move(value, torch_device) for key, value in kwargs.items()}
