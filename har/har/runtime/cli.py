@@ -63,6 +63,27 @@ def run_script(
         _sys.argv = previous_argv
 
 
+@app.command("setup-check")
+def setup_check() -> None:
+    """Print one JSON line saying whether PyTorch is importable. Used by the desktop shell."""
+
+    import json
+    import sys as _sys
+
+    from .._torch import TORCH_AVAILABLE, TORCH_IMPORT_ERROR, torch
+
+    typer.echo(
+        json.dumps(
+            {
+                "torch_installed": TORCH_AVAILABLE,
+                "torch_version": torch.__version__ if TORCH_AVAILABLE else None,
+                "import_error": TORCH_IMPORT_ERROR,
+                "python_version": f"{_sys.version_info.major}.{_sys.version_info.minor}",
+            }
+        )
+    )
+
+
 @app.command()
 def devices() -> None:
     """Discover CPU, Apple MPS, and NVIDIA CUDA backends."""

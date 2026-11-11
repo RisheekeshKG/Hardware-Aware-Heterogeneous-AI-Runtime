@@ -8,12 +8,15 @@ require_torch() at the point of actual use.
 
 from __future__ import annotations
 
+TORCH_IMPORT_ERROR: str | None = None
+
 try:
     import torch as _torch_module
     TORCH_AVAILABLE = True
     torch = _torch_module
-except ImportError:  # pragma: no cover - exercised by the first-launch setup path, not in CI
+except ImportError as _error:  # pragma: no cover - exercised by the first-launch setup path, not in CI
     TORCH_AVAILABLE = False
+    TORCH_IMPORT_ERROR = f"{type(_error).__name__}: {_error}"
     torch = None  # type: ignore[assignment]
 
 

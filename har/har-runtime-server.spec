@@ -2,17 +2,28 @@
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+import sys
+
 # Bake the user-facing `har` SDK into the bundle so scripts the runtime executes can `import har`
 # without any extra install step on the end user's machine.
 _har_sdk_imports = collect_submodules('har')
 
+# torch (installed later by uv) and user scripts import stdlib modules HAR itself never touches,
+# e.g. torch needs `timeit`. PyInstaller only bundles what it sees imported, so ship the whole
+# stdlib except GUI/test packages.
+_STDLIB_SKIP = {"tkinter", "turtle", "turtledemo", "idlelib", "test", "lib2to3", "ensurepip", "venv"}
+_stdlib_imports = []
+for _name in sorted(sys.stdlib_module_names):
+    if _name in _STDLIB_SKIP or _name.startswith("_"):
+        continue
+    _stdlib_imports.extend(collect_submodules(_name, filter=lambda m: ".test" not in m and ".tests" not in m))
+
 # PyInstaller strips `*.dist-info` by default, which makes `importlib.metadata.version()`
 # return "absent" for every package in the frozen bundle. That broke our env-hash mismatch
 # warning because host and worker both reported every package as missing. Pull in the
-# dist-info directories for every package env_hash cares about.
+# dist-info directories for every package env_hash cares about. torch and numpy are NOT
+# bundled — uv installs them into HAR_USER_PKGS_DIR on first launch, with real dist-info.
 _env_hash_packages = (
-    "torch",
-    "numpy",
     "psutil",
     "fastapi",
     "uvicorn",
@@ -37,11 +48,16 @@ a = Analysis(
     # paths resolve.
     binaries=[],
     datas=_metadata_datas,
-    hiddenimports=_har_sdk_imports,
+    hiddenimports=_har_sdk_imports + _stdlib_imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        # Installed at first launch by uv, not bundled. Keeps the installer ~50MB.
+        'torch',
+        'torchvision',
+        'torchaudio',
+        'numpy',
         'tensorflow',
         'cv2',
         'pyarrow',
