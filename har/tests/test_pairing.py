@@ -149,11 +149,23 @@ def test_host_disconnect_stops_worker(connection, monkeypatch, tmp_path):
     assert not (tmp_path / "last-host.json").exists()
 
 
-def test_disconnected_node_cannot_reregister(monkeypatch):
-    monkeypatch.setattr(api, "_nodes", {})
-    monkeypatch.setattr(api, "_disconnected_nodes", set())
-    registration = {"node_id": "pc-1", "name": "PC", "base_url": "http://10.0.0.20:9000", "capabilities": []}
-    client = remote(api.app, "10.0.0.20")
-    assert client.post("/api/nodes/register", json=registration).status_code == 200
-    assert local(api.app).delete("/api/nodes/pc-1").status_code == 200
-    assert client.post("/api/nodes/register", json=registration).status_code == 410
+def test_disconnected_node_cannot_reregister():
+    # The shared state dicts live in api._core and endpoint modules bind to them at
+    # import time, so we mutate in place (clear + restore) rather than rebind.
+    from har.runtime.api import _core as _api_core
+
+    saved_nodes = dict(_api_core._nodes)
+    saved_disconnected = set(_api_core._disconnected_nodes)
+    _api_core._nodes.clear()
+    _api_core._disconnected_nodes.clear()
+    try:
+        registration = {"node_id": "pc-1", "name": "PC", "base_url": "http://10.0.0.20:9000", "capabilities": []}
+        client = remote(api.app, "10.0.0.20")
+        assert client.post("/api/nodes/register", json=registration).status_code == 200
+        assert local(api.app).delete("/api/nodes/pc-1").status_code == 200
+        assert client.post("/api/nodes/register", json=registration).status_code == 410
+    finally:
+        _api_core._nodes.clear()
+        _api_core._nodes.update(saved_nodes)
+        _api_core._disconnected_nodes.clear()
+        _api_core._disconnected_nodes.update(saved_disconnected)
