@@ -34,8 +34,8 @@ or build it from source (see **Development** below).
 
 Download the installer for your OS from
 [GitHub Releases](https://github.com/RisheekeshKG/Hardware-Aware-Heterogeneous-AI-Runtime/releases).
-First launch pulls the matching bundled runtime (~160 MB), so no Python install is
-needed on worker machines.
+The installer includes the HAR runtime (~40 MB) and nothing is downloaded from
+GitHub after install, so no Python install is needed on worker machines.
 
 | Platform | File | Notes |
 |---|---|---|

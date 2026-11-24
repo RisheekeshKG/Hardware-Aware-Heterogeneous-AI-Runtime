@@ -36,6 +36,11 @@
       "icons/icon.ico"
     ],
     "resources": [],
+    "macOS": {
+      "files": {
+        "Resources/runtime/har-runtime-server": "runtime/har-runtime-server"
+      }
+    },
     "windows": {
       "nsis": {
         "compression": "none"

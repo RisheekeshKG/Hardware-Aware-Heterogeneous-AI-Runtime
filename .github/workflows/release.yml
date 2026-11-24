@@ -19,9 +19,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install -e ".[test]"
-      - run: python -m pytest -q
+      - run: python -m pip install -e "./har[test]"
+      - working-directory: har
+        run: python -m pytest -q
 
+  # Each installer carries the ~40 MB runtime (no PyTorch). Nothing else is published:
+  # the app no longer downloads a runtime from GitHub Releases.
   build:
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -36,79 +39,40 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: web/package-lock.json
-      # The Windows app downloads its runtime on first launch (see the windows-*-runtime jobs).
-      - if: runner.os != 'Windows'
-        uses: actions/setup-python@v5
+          cache-dependency-path: desktop/package-lock.json
+      # Must match the Python minor version the app installs PyTorch for on first launch.
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - if: runner.os != 'Windows'
-        run: python -m pip install -e ".[desktop]"
+      - run: python -m pip install -e "./har[desktop]"
       - if: runner.os != 'Windows'
         run: ./scripts/build-sidecar.sh
-      - if: runner.os != 'Windows'
-        run: tar -czf web/src-tauri/runtime/har-runtime-macos-arm64.tar.gz -C web/src-tauri/runtime har-runtime-server
-      - run: npm ci --prefix web
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-sidecar.ps1
+      - run: npm ci --prefix desktop
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = (Get-Content web/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $version = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           choco install innosetup --yes --no-progress
-          npm run desktop:build --prefix web -- --no-bundle
+          npm run desktop:build --prefix desktop -- --no-bundle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" scripts/windows-installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - if: runner.os != 'Windows'
-        run: npm run desktop:build --prefix web
+        run: npm run desktop:build --prefix desktop
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.os }}
           if-no-files-found: error
           path: |
-            web/src-tauri/target/release/bundle/**/*.dmg
-            web/src-tauri/target/release/bundle/**/*.exe
-            web/src-tauri/target/release/bundle/**/*.app.zip
-            web/src-tauri/runtime/har-runtime-*.tar.gz
-
-  windows-runtime:
-    name: Build Windows ${{ matrix.variant }} runtime
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: cpu
-            torch-index: https://download.pytorch.org/whl/cpu
-          - variant: cuda
-            torch-index: https://download.pytorch.org/whl/cu128
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - shell: pwsh
-        run: |
-          python -m pip install --no-cache-dir torch --index-url ${{ matrix.torch-index }}
-          python -m pip install --no-cache-dir -e ".[desktop]"
-          python -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.version.cuda)"
-      - if: matrix.variant == 'cuda'
-        shell: pwsh
-        run: python -c "import torch; assert torch.version.cuda, 'CUDA-enabled PyTorch was not installed'"
-      - shell: pwsh
-        run: ./scripts/build-sidecar.ps1
-      # Archives over 2 GiB (the CUDA runtime) are split into .001, .002, ... parts.
-      - shell: pwsh
-        run: python scripts/package-runtime.py web/src-tauri/runtime/har-runtime-server release/har-runtime-windows-x64-${{ matrix.variant }}.zip
-      - uses: actions/upload-artifact@v4
-        with:
-          name: runtime-windows-${{ matrix.variant }}
-          if-no-files-found: error
-          compression-level: 0
-          path: release/har-runtime-windows-x64-${{ matrix.variant }}.zip*
+            desktop/src-tauri/target/release/bundle/**/*.dmg
+            desktop/src-tauri/target/release/bundle/**/*.exe
 
   publish:
     name: Publish release
-    needs: [test, build, windows-runtime]
+    needs: [test, build]
     # A manual run from a branch only builds; releases come from version tags.
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest

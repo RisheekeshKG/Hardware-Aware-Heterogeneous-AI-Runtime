@@ -94,7 +94,7 @@ function RefreshButton({ onClick, title = 'Refresh' }) {
 }
 
 function App() {
-  const [runtimeSetup, setRuntimeSetup] = useState({ checking: true, installed: true, target: '', asset: '', error: '' })
+  const [runtimeSetup, setRuntimeSetup] = useState({ checking: true, installed: true, error: '' })
   const [view, setView] = useState('runtime')
   const [runtime, setRuntime] = useState({ devices: [], nodes: [], runs: [] })
   const [scripts, setScripts] = useState([])
@@ -231,7 +231,7 @@ function App() {
   const pageLabel = navItems.find((item) => item.id === view)?.label || 'Runtime'
 
   if (runtimeSetup.checking || !runtimeSetup.installed) {
-    return <RuntimeSetup status={runtimeSetup} onInstalled={(status) => { startedAt.current = Date.now(); setRuntimeSetup({ ...status, checking: false, error: '' }) }} />
+    return <RuntimeSetup status={runtimeSetup} />
   }
 
   return <div className="app-shell">
@@ -245,7 +245,6 @@ function App() {
 
     <main className="main-content">
       <header className="topbar"><div className="breadcrumbs"><span>HAR</span><i>/</i><strong>{pageLabel}</strong></div><div className="topbar-actions"><span className="live-pill"><span className={`status-dot ${error ? 'error' : ''}`} /> {error ? 'Disconnected' : 'Live API'}</span><button className="icon-button" onClick={loadRuntime} aria-label="Refresh runtime">R</button></div></header>
-      {runtimeSetup.update_available && <RuntimeUpdate status={runtimeSetup} onUpdated={(status) => { startedAt.current = Date.now(); connectedOnce.current = false; setRuntimeSetup({ ...status, checking: false, error: '' }); notify('Runtime updated.') }} />}
       {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>Make sure the HAR service is running, then try again.</span></div><button onClick={loadRuntime}>Try again</button></div>}
       {view === 'runtime' && <RuntimeView devices={runtime.devices} nodes={runtime.nodes} runs={runtime.runs} activeRun={activeRun} cpuInfo={cpuInfo} onLaunch={() => setShowLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
       {view === 'workloads' && <WorkloadsView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
@@ -277,58 +276,10 @@ function PairingPrompt({ request, onDecided }) {
   return <div className="modal-backdrop"><div className="launcher-modal pairing-modal" role="alertdialog" aria-labelledby="pairing-title"><div className="modal-header"><div><div className="eyebrow">CONNECTION REQUEST</div><h2 id="pairing-title">Allow another computer to use this one?</h2></div></div><p>The HAR host at <strong>{host}</strong> wants to send tasks to this computer. Accepting lets it run Python files and benchmarks here. Only accept computers you trust.</p><div className="setup-detail"><span>Request from</span><strong>{request.client_ip}</strong></div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => decide('decline')} disabled={busy}>Decline</button><button type="button" className="primary-button" onClick={() => decide('accept')} disabled={busy}>Accept <span>-&gt;</span></button></div></div></div>
 }
 
-function RuntimeUpdate({ status, onUpdated }) {
-  const [updating, setUpdating] = useState(false)
-  const [progress, setProgress] = useState(null)
-  const [error, setError] = useState('')
-  useEffect(() => {
-    const unlisten = listen('runtime-install-progress', (event) => setProgress(event.payload))
-    return () => { unlisten.then((stop) => stop()) }
-  }, [])
-  const update = async () => {
-    setUpdating(true); setError('')
-    try {
-      const updated = await invoke('install_runtime')
-      await invoke('start_runtime')
-      onUpdated(updated)
-    } catch (updateError) {
-      setError(updateError.toString())
-      invoke('start_runtime').catch(() => {})
-    } finally { setUpdating(false) }
-  }
-  const percent = progress?.total ? Math.round((progress.downloaded / progress.total) * 100) : null
-  const label = !updating ? 'Update runtime' : progress?.stage === 'extracting' ? 'Unpacking...' : percent != null ? `Downloading ${percent}%` : 'Downloading...'
-  return <div className="api-error runtime-update"><span className="status-dot" /><div><strong>Runtime update available</strong><span>{error || `This app needs runtime ${status.expected_version}; ${status.installed_version || 'an older version'} is installed. Tasks pause briefly while it restarts.`}</span></div><button onClick={update} disabled={updating}>{label}</button></div>
-}
-
-function RuntimeSetup({ status, onInstalled }) {
-  const [installing, setInstalling] = useState(false)
-  const [progress, setProgress] = useState(null)
-  const [error, setError] = useState(status.error || '')
-  useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return undefined
-    const unlisten = listen('runtime-install-progress', (event) => setProgress(event.payload))
-    return () => { unlisten.then((stop) => stop()) }
-  }, [])
-  const install = async () => {
-    setInstalling(true)
-    setProgress(null)
-    setError('')
-    try {
-      const installed = await invoke('install_runtime')
-      await invoke('start_runtime')
-      onInstalled(installed)
-    } catch (installError) {
-      setError(installError.toString())
-    } finally {
-      setInstalling(false)
-    }
-  }
-  const percent = progress?.total ? Math.min(100, (progress.downloaded / progress.total) * 100) : null
-  const progressLabel = progress?.stage === 'extracting'
-    ? 'Unpacking runtime...'
-    : progress ? `${formatBytes(progress.downloaded)}${progress.total ? ` of ${formatBytes(progress.total)}` : ''}` : 'Contacting GitHub...'
-  return <div className="runtime-setup"><div className="runtime-setup-card"><div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div><div className="eyebrow">ONE-TIME SETUP</div><h1>Prepare this computer</h1><p>HAR will download the compute runtime matched to this computer. The desktop app stays small, and the runtime is reused after setup.</p><div className="setup-detail"><span>Detected target</span><strong>{status.target || 'This computer'}</strong></div><div className="setup-detail"><span>Download</span><strong>{progress?.asset || status.asset || 'Hardware-matched runtime'}</strong></div>{installing && <div className="setup-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent == null ? undefined : Math.round(percent)}><div className="setup-progress-track"><div className={`setup-progress-fill ${percent == null ? 'indeterminate' : ''}`} style={percent == null ? undefined : { width: `${percent}%` }} /></div><div className="setup-progress-meta"><span>{progressLabel}</span>{percent != null && progress?.stage !== 'extracting' && <strong>{percent.toFixed(0)}%</strong>}</div></div>}{error && <div className="form-error">{error}</div>}<button className="primary-button setup-button" onClick={install} disabled={installing}>{installing ? 'Installing runtime...' : error ? 'Try again' : 'Download runtime'}<span>-&gt;</span></button><small className="setup-footnote">{status.target === 'windows-x64-cuda' ? 'The NVIDIA CUDA runtime is a large download (about 2.5 GB). HAR falls back to the CPU runtime if it is unavailable.' : 'Download size depends on the detected hardware.'}</small></div></div>
+function RuntimeSetup({ status }) {
+  const brand = <div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div>
+  if (status.checking) return <div className="runtime-setup"><div className="runtime-setup-card">{brand}<div className="eyebrow">STARTING</div><h1>Starting HAR</h1></div></div>
+  return <div className="runtime-setup"><div className="runtime-setup-card">{brand}<div className="eyebrow">INSTALL PROBLEM</div><h1>HAR's runtime is missing</h1><p>This copy of HAR doesn't include its compute runtime, so it can't start. Reinstall HAR from the latest installer.</p>{status.error && <div className="form-error">{status.error}</div>}</div></div>
 }
 
 function PageHeader({ eyebrow, title, description, action }) { return <div className="page-header"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{action}</div> }

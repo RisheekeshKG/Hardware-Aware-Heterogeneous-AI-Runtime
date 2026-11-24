@@ -9,7 +9,7 @@ AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={localappdata}\HAR Runtime
 DefaultGroupName={#AppName}
-OutputDir=..\web\src-tauri\target\release\bundle\nsis
+OutputDir=..\desktop\src-tauri\target\release\bundle\nsis
 OutputBaseFilename=HAR Runtime_{#AppVersion}_x64-setup
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -20,7 +20,9 @@ WizardStyle=modern
 UninstallDisplayIcon={app}\{#AppExeName}
 
 [Files]
-Source: "..\web\src-tauri\target\release\har-runtime.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\desktop\src-tauri\target\release\har-runtime.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The runtime ships inside the installer; the app looks for it in {app}\runtime.
+Source: "..\desktop\src-tauri\runtime\har-runtime-server\*"; DestDir: "{app}\runtime\har-runtime-server"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

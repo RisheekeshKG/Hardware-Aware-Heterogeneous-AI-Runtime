@@ -85,7 +85,9 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    # On Windows the runtime re-launches itself for every user script; a console-subsystem exe
+    # started from a window-less parent pops a visible console each time.
+    console=sys.platform != "win32",
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
