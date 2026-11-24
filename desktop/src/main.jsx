@@ -169,7 +169,9 @@ function App() {
     } catch (requestError) {
       const stillStarting = window.__TAURI_INTERNALS__ && !connectedOnce.current && Date.now() - startedAt.current < RUNTIME_STARTUP_GRACE_MS
       if (stillStarting) return
-      setError(`${requestError.message}. Start the API with "har serve".`)
+      setError(window.__TAURI_INTERNALS__
+        ? `HAR's background service isn't answering (${requestError.message}). If this doesn't clear in a few seconds, restart the app.`
+        : `${requestError.message}. Start the API with "har serve".`)
       setLoading(false)
     }
   }
@@ -254,7 +256,7 @@ function App() {
 
     <main className="main-content">
       <header className="topbar"><div className="breadcrumbs"><span>HAR</span><i>/</i><strong>{pageLabel}</strong></div><div className="topbar-actions"><span className="live-pill"><span className={`status-dot ${error ? 'error' : ''}`} /> {error ? 'Disconnected' : 'Live API'}</span><button className="icon-button" onClick={loadRuntime} aria-label="Refresh runtime">R</button></div></header>
-      {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>Make sure the HAR service is running, then try again.</span></div><button onClick={loadRuntime}>Try again</button></div>}
+      {error && <div className="api-error"><span className="status-dot error" /><div><strong>HAR cannot connect right now</strong><span>{error}</span></div><button onClick={loadRuntime}>Try again</button></div>}
       {view === 'runtime' && <RuntimeView devices={runtime.devices} nodes={runtime.nodes} runs={runtime.runs} activeRun={activeRun} cpuInfo={cpuInfo} onLaunch={() => setShowLauncher(true)} onNavigate={setView} onSelectRun={setSelectedRunId} />}
       {view === 'workloads' && <WorkloadsView scripts={scripts} selectedScriptId={selectedScriptId} onSelectScript={setSelectedScriptId} onScriptLaunch={() => setShowScriptLauncher(true)} devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} onRefresh={loadRuntime} />}
       {view === 'fabric' && <FabricView devices={runtime.devices} nodes={runtime.nodes} cpuInfo={cpuInfo} trustedHosts={trustedHosts} workerConnection={workerConnection} sessionRole={sessionRole} onConnect={() => setShowConnect(true)} onDisconnect={disconnectNode} onRefresh={loadRuntime} onRevokeTrustedHost={async (ip) => { if (!window.confirm(`Revoke trust for ${ip}? HAR will refuse future jobs from this host.`)) return; try { const r = await fetch(`${API}/api/trusted-hosts/${encodeURIComponent(ip)}`, { method: 'DELETE' }); if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${r.status}`) } notify(`${ip} is no longer trusted.`); await loadRuntime() } catch (e) { notify(`Could not revoke: ${e.message}`) } }} onStopServing={async () => { const host = workerConnection?.host_ip || 'this host'; if (!window.confirm(`Stop working for ${host}? HAR will stop auto-retrying every 5 seconds. You can accept a new host anytime.`)) return; try { const r = await fetch(`${API}/api/worker-connection/stop`, { method: 'POST' }); if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.detail || `HTTP ${r.status}`) } notify(`Stopped working for ${host}.`); await loadRuntime() } catch (e) { notify(`Could not stop: ${e.message}`) } }} />}
@@ -338,7 +340,7 @@ function RuntimeView({ devices, nodes, runs, activeRun, cpuInfo, onLaunch, onNav
   return <>
     <PageHeader eyebrow="HAR" title="Overview" description="See what is running and which devices are available to help." action={<button className="primary-button" onClick={onLaunch}><span>+</span> Start a task</button>} />
     <section className="stat-grid"><StatCard label="Tasks in progress" value={String(runningCount + queuedCount).padStart(2, '0')} detail={`${runningCount} running · ${queuedCount} waiting`} accent="lime" /><StatCard label="Devices available" value={String((availableDevices.length ? 1 : 0) + onlineNodes.length).padStart(2, '0')} detail={`${availableDevices.length + onlineNodes.reduce((sum, node) => sum + node.capabilities.filter((capability) => capability.available !== false).length, 0)} runtimes across your machines`} accent="blue" /><StatCard label="System status" value={devices.length ? 'Ready' : 'Waiting'} detail={devices.length ? 'Everything is responding' : 'Looking for devices'} accent="green" /><StatCard label="Finished tasks" value={String(runs.filter((run) => run.status === 'completed').length).padStart(2, '0')} detail="Completed successfully" accent="amber" /></section>
-    <section className="runtime-grid"><ActiveWorkload run={activeRun} onTrace={() => { if (activeRun) { onSelectRun(activeRun.id); onNavigate('traces') } }} /><FabricSummary devices={devices} nodes={nodes} cpuInfo={cpuInfo} onOpen={() => onNavigate('fabric')} /></section>
+    <section className="runtime-grid"><ActiveWorkload run={activeRun} onTrace={() => { if (activeRun) { onSelectRun(activeRun.id); onNavigate('benchmarks') } }} /><FabricSummary devices={devices} nodes={nodes} cpuInfo={cpuInfo} onOpen={() => onNavigate('fabric')} /></section>
     <section className="section-block"><div className="section-heading"><div><div className="eyebrow">RECENT ACTIVITY</div><h2>Recent benchmark runs</h2></div><button className="text-button" onClick={() => onNavigate('benchmarks')}>Open benchmarks <span>-&gt;</span></button></div>{runs.length ? <div className="workload-list">{runs.slice(0, 8).map((run) => <WorkloadRow key={run.id} run={run} nodes={nodes} onClick={() => { onSelectRun(run.id); onNavigate('benchmarks') }} />)}</div> : <EmptyState title="No benchmark runs yet" detail="Benchmarks are optional dev tools. Scripts are the main workflow." action="Open scripts" onAction={() => onNavigate('workloads')} />}</section>
   </>
 }
@@ -771,7 +773,7 @@ function cpuLabel(device, cpuInfo) {
 }
 function deviceHeading(device, cpuInfo) {
   if (device?.backend === 'cpu') return cpuLabel(device, cpuInfo)
-  return device?.name || friendlyBackend(device?.backend)
+  return device?.device_name || friendlyBackend(device?.backend)
 }
 function BackendBadge({ backend }) { return <span className={`backend-badge ${backend.toLowerCase()}`}>{friendlyBackend(backend)}</span> }
 function StatusBadge({ status }) { return <span className={`status-badge ${status}`}><span className="status-dot" />{status}</span> }

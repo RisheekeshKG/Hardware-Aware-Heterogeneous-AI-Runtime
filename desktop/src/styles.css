@@ -166,3 +166,8 @@ button { cursor: pointer; }
 /* Fill the space beside the sidebar instead of the full window width, which
    pushed the right edge of every page (e.g. banner buttons) off-screen. */
 .main-content { flex: 1 1 auto; min-width: 0; width: auto; max-width: 1440px; }
+
+/* Failed runs had no style of their own and showed the glowing lime "running" dot. */
+.status-badge.failed { color: var(--red); background: #241715; }
+.status-badge.failed .status-dot { background: var(--red); box-shadow: none; }
+.workload-pulse.failed { background: var(--red); }
