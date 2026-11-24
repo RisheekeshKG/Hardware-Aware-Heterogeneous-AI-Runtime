@@ -37,13 +37,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 20 is past end of life; matches release.yml.
+          node-version: "22"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      - name: Build frontend
+      - name: Lint and build frontend
         working-directory: desktop
         run: |
           npm ci
+          npm run lint
           npm run build
 
   cargo-check:

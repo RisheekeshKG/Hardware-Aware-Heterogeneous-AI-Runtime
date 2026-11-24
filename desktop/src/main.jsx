@@ -607,7 +607,6 @@ function Launcher({ devices, nodes, cpuInfo, onClose, onSubmit }) {
       setForm((current) => ({ ...current, backend: first }))
     }
   }, [targetNode, availableBackends.map((item) => item.backend).join(',')])
-  const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }))
   const backendLabel = (backend) => backend.backend === 'cpu' && targetNode === 'local' ? cpuLabel(backend, cpuInfo) : (backend.device_name || friendlyBackend(backend.backend))
   const submit = async (event) => {
     event.preventDefault(); setSubmitError('')
@@ -686,11 +685,10 @@ function backendLineLabel(backend, cpuInfo) {
   if (backend?.backend === 'cpu') return cpuLabel(backend, cpuInfo)
   return backend?.device_name || friendlyBackend(backend?.backend)
 }
-function useScriptStream(scriptId, scriptStatus) {
+function useScriptStream(scriptId) {
   // Live tail of /api/scripts/{id}/stream via EventSource. Each chunk is appended as it arrives,
-  // so a 2-minute training script no longer shows a blank panel. We close the stream when the
-  // server sends the terminal `done` event, when the component unmounts, or when the script
-  // transitions to completed/failed via the polled snapshot (defence against SSE hangs).
+  // so a 2-minute training script no longer shows a blank panel. The stream closes on the
+  // server's terminal `done` event, on unmount, or on any stream error.
   const [chunks, setChunks] = useState([])
   const outputRef = useRef('')
   useEffect(() => {
@@ -716,8 +714,7 @@ function useScriptStream(scriptId, scriptStatus) {
 }
 
 function ScriptDetail({ script, onClose, onRefresh, devices, nodes, cpuInfo }) {
-  const elapsed = scriptElapsed(script)
-  const { liveOutput } = useScriptStream(script.id, script.status)
+  const { liveOutput } = useScriptStream(script.id)
   const output = liveOutput || script.output || ''
   const hasOutput = Boolean(output && output.length)
   const machine = targetMachine(script, devices, nodes)
