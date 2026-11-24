@@ -1,60 +1,310 @@
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
-use tauri::{AppHandle, Manager, RunEvent};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_shell::process::CommandChild;
 
 struct RuntimeProcesses(Mutex<Vec<CommandChild>>);
 
-// Serializes set_runtime_role so two in-flight calls can't both drain stop_services and
-// double-spawn (which left orphan runtimes bound to 8000/9000 in testing).
+// Serializes service restarts (role switches, the restart after installing PyTorch) so two
+// in-flight calls can't both drain stop_services and double-spawn, which left orphan runtimes
+// bound to 8000/9000 in testing.
 static ROLE_SWITCH: Mutex<()> = Mutex::new(());
 
-fn runtime_executable_name() -> &'static str {
+static INSTALLING_TORCH: AtomicBool = AtomicBool::new(false);
+// The running `uv pip install`, held here so cancel_torch_install can kill it. Downloads can stall
+// on a bad connection without uv ever timing out (seen in testing), so the user needs a way out.
+static INSTALL_PROCESS: Mutex<Option<std::process::Child>> = Mutex::new(None);
+static INSTALL_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+/// Installed by uv on first launch. numpy isn't a torch dependency, but most user scripts import it.
+const PYTHON_PACKAGES: &[&str] = &["torch", "numpy"];
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn exe_name(name: &str) -> String {
     if cfg!(windows) {
-        "har-runtime-server.exe"
+        format!("{name}.exe")
     } else {
-        "har-runtime-server"
+        name.to_string()
     }
 }
 
-/// The runtime ships inside the app: `Contents/Resources/runtime/` in the macOS bundle and
-/// a `runtime` folder beside the executable on Windows (the Inno Setup installer puts it there).
-/// Debug builds also look in `src-tauri/runtime/`, where scripts/build-sidecar.* writes it.
-fn runtime_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let mut candidates = vec![app
+/// The runtime and uv ship inside the app: `Contents/Resources/runtime/` in the macOS bundle and
+/// a `runtime` folder beside the executable on Windows (the Inno Setup installer puts them there).
+/// Debug builds also look in `src-tauri/runtime/`, where scripts/build-sidecar.* writes them.
+fn bundled(app: &AppHandle, folder: &str, file: &str) -> PathBuf {
+    let mut roots: Vec<PathBuf> = app
         .path()
         .resource_dir()
-        .map_err(|error| error.to_string())?
-        .join("runtime")];
+        .ok()
+        .into_iter()
+        .map(|dir| dir.join("runtime"))
+        .collect();
     if let Some(exe_dir) = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
     {
-        candidates.push(exe_dir.join("runtime"));
+        roots.push(exe_dir.join("runtime"));
     }
     #[cfg(debug_assertions)]
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime"));
-    let executable = |dir: &PathBuf| dir.join("har-runtime-server").join(runtime_executable_name());
-    Ok(candidates
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("runtime"));
+    let candidates: Vec<PathBuf> = roots.iter().map(|root| root.join(folder).join(file)).collect();
+    candidates
         .iter()
-        .map(executable)
         .find(|path| path.exists())
-        .unwrap_or_else(|| executable(&candidates[0])))
+        .or(candidates.first())
+        .cloned()
+        .unwrap_or_else(|| PathBuf::from(file))
+}
+
+fn runtime_path(app: &AppHandle) -> PathBuf {
+    bundled(app, "har-runtime-server", &exe_name("har-runtime-server"))
+}
+
+fn uv_path(app: &AppHandle) -> PathBuf {
+    bundled(app, "uv", &exe_name("uv"))
+}
+
+/// Where uv installs PyTorch. Passed to the runtime as HAR_USER_PKGS_DIR, which
+/// desktop_entry.py puts on sys.path before anything imports torch.
+fn python_packages_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("python-packages"))
+        .map_err(|error| error.to_string())
+}
+
+/// The JSON line printed by `har-runtime-server setup-check`.
+#[derive(Deserialize)]
+struct SetupCheck {
+    torch_installed: bool,
+    torch_version: Option<String>,
+    import_error: Option<String>,
+    python_version: String,
+}
+
+fn setup_check(app: &AppHandle, runtime: &Path) -> Result<SetupCheck, String> {
+    let mut command = std::process::Command::new(runtime);
+    command.arg("setup-check");
+    if let Ok(packages) = python_packages_dir(app) {
+        command.env("HAR_USER_PKGS_DIR", packages);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("could not run the HAR runtime: {error}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let report = stdout
+        .lines()
+        .rev()
+        .find(|line| line.trim_start().starts_with('{'))
+        .ok_or_else(|| {
+            format!(
+                "the HAR runtime did not report its setup: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            )
+        })?;
+    serde_json::from_str(report)
+        .map_err(|error| format!("unreadable setup report from the HAR runtime: {error}"))
 }
 
 #[derive(Serialize)]
 struct RuntimeStatus {
     installed: bool,
+    torch_installed: bool,
+    torch_version: Option<String>,
+    /// Why torch didn't import, e.g. "No module named 'torch'" before first-launch setup.
+    torch_error: Option<String>,
+    installing: bool,
+}
+
+fn current_status(app: &AppHandle) -> RuntimeStatus {
+    let runtime = runtime_path(app);
+    let installed = runtime.exists();
+    let (torch_installed, torch_version, torch_error) = if !installed {
+        (false, None, None)
+    } else {
+        match setup_check(app, &runtime) {
+            Ok(check) => (check.torch_installed, check.torch_version, check.import_error),
+            Err(error) => (false, None, Some(error)),
+        }
+    };
+    RuntimeStatus {
+        installed,
+        torch_installed,
+        torch_version,
+        torch_error,
+        installing: INSTALLING_TORCH.load(Ordering::SeqCst),
+    }
+}
+
+/// Async because setup-check starts the runtime, which imports torch when it's present.
+#[tauri::command]
+async fn runtime_status(app: AppHandle) -> Result<RuntimeStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || current_status(&app))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[derive(Clone, Serialize)]
+struct InstallLog {
+    line: String,
+}
+
+fn install_torch_blocking(app: &AppHandle) -> Result<(), String> {
+    let python_version = setup_check(app, &runtime_path(app))?.python_version;
+    let uv = uv_path(app);
+    if !uv.exists() {
+        return Err("This copy of HAR is missing its package installer (uv). Reinstall HAR.".to_string());
+    }
+    let target = python_packages_dir(app)?;
+    let staging = target.with_file_name("python-packages.partial");
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
+    }
+
+    let mut command = std::process::Command::new(&uv);
+    command
+        .args(["pip", "install", "--target"])
+        .arg(&staging)
+        // Packages must match the runtime's own Python. uv needs an interpreter to resolve them
+        // and downloads that Python version if the computer has none.
+        .args(["--python", &python_version, "--torch-backend", "auto"])
+        .args(PYTHON_PACKAGES)
+        .env("UV_PYTHON_DOWNLOADS", "automatic")
+        .env("UV_NO_CONFIG", "1")
+        .env("NO_COLOR", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start uv: {error}"))?;
+
+    let recent = Arc::new(Mutex::new(VecDeque::new()));
+    let streams: Vec<Box<dyn Read + Send>> = [
+        child.stdout.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>),
+        child.stderr.take().map(|stream| Box::new(stream) as Box<dyn Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let readers: Vec<_> = streams
+        .into_iter()
+        .map(|stream| {
+            let app = app.clone();
+            let recent = Arc::clone(&recent);
+            std::thread::spawn(move || {
+                for line in BufReader::new(stream).lines().map_while(Result::ok) {
+                    let line = line.trim().to_string();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Ok(mut recent) = recent.lock() {
+                        if recent.len() == 12 {
+                            recent.pop_front();
+                        }
+                        recent.push_back(line.clone());
+                    }
+                    let _ = app.emit("torch-install-log", InstallLog { line });
+                }
+            })
+        })
+        .collect();
+    *INSTALL_PROCESS.lock().map_err(|error| error.to_string())? = Some(child);
+    // Poll rather than wait() so cancel_torch_install can take the lock and kill uv.
+    let status = loop {
+        let mut slot = INSTALL_PROCESS.lock().map_err(|error| error.to_string())?;
+        let Some(child) = slot.as_mut() else {
+            break None;
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                *slot = None;
+                break Some(status);
+            }
+            Ok(None) => {}
+            Err(_) => {
+                *slot = None;
+                break None;
+            }
+        }
+        drop(slot);
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    for reader in readers {
+        let _ = reader.join();
+    }
+    if !status.is_some_and(|status| status.success()) {
+        let _ = std::fs::remove_dir_all(&staging);
+        if INSTALL_CANCELLED.swap(false, Ordering::SeqCst) {
+            return Err("Install cancelled. Downloads that finished are kept, so trying again picks up from there.".to_string());
+        }
+        let detail = recent
+            .lock()
+            .map(|lines| lines.iter().cloned().collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+        return Err(format!("PyTorch install failed.\n{detail}"));
+    }
+
+    // The runtime imports torch only at startup, and on Windows it holds files in the old folder
+    // open, so stop it, swap the new folder in, and start it again even if the swap failed.
+    let _guard = ROLE_SWITCH.lock().map_err(|error| error.to_string())?;
+    stop_services(app);
+    let swapped = (|| {
+        if target.exists() {
+            std::fs::remove_dir_all(&target)
+                .map_err(|error| format!("could not replace the old PyTorch install: {error}"))?;
+        }
+        std::fs::rename(&staging, &target).map_err(|error| error.to_string())
+    })();
+    let restarted = start_services(app, &stored_role(app));
+    swapped.and(restarted)
+}
+
+/// Installs PyTorch with the bundled uv. Async so the download (minutes; gigabytes for CUDA
+/// builds) runs off the main thread. Progress arrives as `torch-install-log` events.
+#[tauri::command]
+async fn install_torch(app: AppHandle) -> Result<RuntimeStatus, String> {
+    if INSTALLING_TORCH.swap(true, Ordering::SeqCst) {
+        return Err("PyTorch is already being installed".to_string());
+    }
+    INSTALL_CANCELLED.store(false, Ordering::SeqCst);
+    let handle = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || install_torch_blocking(&handle))
+        .await
+        .map_err(|error| error.to_string())
+        .and_then(|result| result);
+    INSTALLING_TORCH.store(false, Ordering::SeqCst);
+    result?;
+    runtime_status(app).await
 }
 
 #[tauri::command]
-fn runtime_status(app: AppHandle) -> RuntimeStatus {
-    RuntimeStatus {
-        installed: runtime_path(&app).map(|path| path.exists()).unwrap_or(false),
+fn cancel_torch_install() -> Result<(), String> {
+    let mut slot = INSTALL_PROCESS.lock().map_err(|error| error.to_string())?;
+    if let Some(child) = slot.as_mut() {
+        INSTALL_CANCELLED.store(true, Ordering::SeqCst);
+        child.kill().map_err(|error| error.to_string())?;
     }
+    Ok(())
 }
 
 fn stop_services(app: &AppHandle) {
@@ -69,19 +319,13 @@ fn stop_services(app: &AppHandle) {
     std::thread::sleep(Duration::from_millis(800));
 }
 
-#[tauri::command]
-fn start_runtime(app: AppHandle) -> Result<String, String> {
-    let runtime = runtime_path(&app)?;
-    if !runtime.exists() {
-        return Err("HAR runtime is not installed yet".to_string());
-    }
-    let role = stored_role(&app);
+/// Spawns the services for `role` and records them. Callers stop the old ones first and hold
+/// ROLE_SWITCH.
+fn start_services(app: &AppHandle, role: &str) -> Result<(), String> {
+    let children = spawn_services(app, &runtime_path(app), role)?;
     let state = app.state::<RuntimeProcesses>();
-    let mut children = state.0.lock().map_err(|error| error.to_string())?;
-    if children.is_empty() {
-        *children = spawn_services(&app, &runtime, &role)?;
-    }
-    Ok(role)
+    *state.0.lock().map_err(|error| error.to_string())? = children;
+    Ok(())
 }
 
 fn stored_role(app: &AppHandle) -> String {
@@ -103,14 +347,18 @@ fn spawn_process(
 ) -> Result<CommandChild, String> {
     use tauri_plugin_shell::ShellExt;
 
-    let (mut events, child) = app
+    let mut command = app
         .shell()
         .command(runtime)
         .args(args)
         .env("HAR_RUNTIME_ROLE", role)
         // The runtime exits on its own if this app dies without cleaning up,
         // so a crashed or force-quit app never leaves ports 8000/9000 taken.
-        .env("HAR_PARENT_PID", std::process::id().to_string())
+        .env("HAR_PARENT_PID", std::process::id().to_string());
+    if let Ok(packages) = python_packages_dir(app) {
+        command = command.env("HAR_USER_PKGS_DIR", packages);
+    }
+    let (mut events, child) = command
         .set_process_group(true)
         .spawn()
         .map_err(|error| error.to_string())?;
@@ -315,7 +563,6 @@ async fn set_runtime_role(app: AppHandle, role: String) -> Result<String, String
     if !matches!(role.as_str(), "host" | "worker" | "standalone") {
         return Err("Role must be host, worker, or standalone".to_string());
     }
-    let runtime = runtime_path(&app)?;
     let config_dir = app
         .path()
         .app_config_dir()
@@ -326,10 +573,7 @@ async fn set_runtime_role(app: AppHandle, role: String) -> Result<String, String
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = ROLE_SWITCH.lock().map_err(|error| error.to_string())?;
         stop_services(&app);
-        let children = spawn_services(&app, &runtime, &role)?;
-        let state = app.state::<RuntimeProcesses>();
-        let mut current = state.0.lock().map_err(|error| error.to_string())?;
-        *current = children;
+        start_services(&app, &role)?;
         Ok(role)
     })
     .await
@@ -345,17 +589,15 @@ pub fn run() {
             let role = stored_role(&handle);
             // Never let a runtime problem stop the window from opening; the UI
             // reports a missing or disconnected runtime instead.
-            let children = runtime_path(&handle)
-                .ok()
-                .filter(|runtime| runtime.exists())
-                .and_then(|runtime| match spawn_services(&handle, &runtime, &role) {
-                    Ok(children) => Some(children),
-                    Err(error) => {
-                        eprintln!("could not start HAR runtime: {error}");
-                        None
-                    }
+            let runtime = runtime_path(&handle);
+            let children = if runtime.exists() {
+                spawn_services(&handle, &runtime, &role).unwrap_or_else(|error| {
+                    eprintln!("could not start HAR runtime: {error}");
+                    Vec::new()
                 })
-                .unwrap_or_default();
+            } else {
+                Vec::new()
+            };
             app.manage(RuntimeProcesses(Mutex::new(children)));
             Ok(())
         })
@@ -363,7 +605,8 @@ pub fn run() {
             set_runtime_role,
             runtime_role,
             runtime_status,
-            start_runtime,
+            install_torch,
+            cancel_torch_install,
             cpu_info
         ])
         .build(tauri::generate_context!())

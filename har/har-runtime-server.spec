@@ -2,6 +2,7 @@
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
+import importlib.util
 import sys
 
 # Bake the user-facing `har` SDK into the bundle so scripts the runtime executes can `import har`
@@ -16,7 +17,15 @@ _stdlib_imports = []
 for _name in sorted(sys.stdlib_module_names):
     if _name in _STDLIB_SKIP or _name.startswith("_"):
         continue
-    _stdlib_imports.extend(collect_submodules(_name, filter=lambda m: ".test" not in m and ".tests" not in m))
+    _spec = importlib.util.find_spec(_name)
+    if _spec is None:  # platform-specific, e.g. winreg on macOS
+        continue
+    if _spec.submodule_search_locations is None:
+        # Plain module: list it without importing it. collect_submodules imports what it scans,
+        # and importing `antigravity` opens xkcd.com/353 in a browser on every build.
+        _stdlib_imports.append(_name)
+    else:
+        _stdlib_imports.extend(collect_submodules(_name, filter=lambda m: ".test" not in m and ".tests" not in m))
 
 # PyInstaller strips `*.dist-info` by default, which makes `importlib.metadata.version()`
 # return "absent" for every package in the frozen bundle. That broke our env-hash mismatch

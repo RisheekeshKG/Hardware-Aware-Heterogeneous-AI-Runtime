@@ -17,6 +17,7 @@ desktop/src-tauri/binaries/har-runtime-*
 # Tauri shell build artefacts — never tracked.
 desktop/src-tauri/target/
 desktop/src-tauri/runtime/har-runtime-server/
+desktop/src-tauri/runtime/uv/
 desktop/dist/
 
 # Frontend build artefacts and installed deps.

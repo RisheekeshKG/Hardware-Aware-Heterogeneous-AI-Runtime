@@ -34,8 +34,10 @@ or build it from source (see **Development** below).
 
 Download the installer for your OS from
 [GitHub Releases](https://github.com/RisheekeshKG/Hardware-Aware-Heterogeneous-AI-Runtime/releases).
-The installer includes the HAR runtime (~40 MB) and nothing is downloaded from
-GitHub after install, so no Python install is needed on worker machines.
+The installer is about 50 MB and includes the HAR runtime. On first launch HAR installs
+PyTorch into its own folder with the bundled [uv](https://github.com/astral-sh/uv): about
+150 MB on a Mac, about 3 GB for the CUDA build on Windows with an NVIDIA GPU. That step
+needs internet once; no Python install is needed on any machine.
 
 | Platform | File | Notes |
 |---|---|---|

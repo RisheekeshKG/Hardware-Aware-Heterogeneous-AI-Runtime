@@ -38,7 +38,8 @@
     "resources": [],
     "macOS": {
       "files": {
-        "Resources/runtime/har-runtime-server": "runtime/har-runtime-server"
+        "Resources/runtime/har-runtime-server": "runtime/har-runtime-server",
+        "Resources/runtime/uv": "runtime/uv"
       }
     },
     "windows": {

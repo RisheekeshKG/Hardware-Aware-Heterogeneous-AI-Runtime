@@ -23,6 +23,8 @@ UninstallDisplayIcon={app}\{#AppExeName}
 Source: "..\desktop\src-tauri\target\release\har-runtime.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The runtime ships inside the installer; the app looks for it in {app}\runtime.
 Source: "..\desktop\src-tauri\runtime\har-runtime-server\*"; DestDir: "{app}\runtime\har-runtime-server"; Flags: ignoreversion recursesubdirs createallsubdirs
+; uv installs PyTorch on first launch.
+Source: "..\desktop\src-tauri\runtime\uv\uv.exe"; DestDir: "{app}\runtime\uv"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"

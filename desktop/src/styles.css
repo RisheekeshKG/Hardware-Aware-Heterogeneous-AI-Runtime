@@ -49,6 +49,10 @@ button { cursor: pointer; }
  .setup-detail strong { text-align: right; overflow-wrap: anywhere; }
  .setup-button { width: 100%; justify-content: center; margin-top: 28px; }
  .setup-footnote { display: block; margin-top: 14px; color: var(--muted); text-align: center; }
+.setup-log { margin-top: 10px; overflow: hidden; color: var(--muted); font: 10px 'DM Mono'; white-space: nowrap; text-overflow: ellipsis; }
+.setup-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+.setup-skip { display: block; margin: 16px auto 0; }
+.setup-hint { margin-top: 10px; color: var(--soft); font-size: 11px; line-height: 1.5; }
 .role-panel { margin-bottom: 18px; padding: 18px 20px; }
 .role-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
 .role-panel-head p { margin: 6px 0 0; color: var(--soft); font-size: 12px; }
