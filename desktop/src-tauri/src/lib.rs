@@ -236,8 +236,14 @@ fn install_torch_blocking(app: &AppHandle) -> Result<(), String> {
             let app = app.clone();
             let recent = Arc::clone(&recent);
             std::thread::spawn(move || {
-                for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                    let line = line.trim().to_string();
+                // Decode leniently and never stop early: if this reader quit on a non-UTF-8
+                // byte, the pipe would close and the installer's next print would fail
+                // (EINVAL on Windows), killing the install.
+                let mut reader = BufReader::new(stream);
+                let mut raw = Vec::new();
+                while reader.read_until(b'\n', &mut raw).is_ok_and(|read| read > 0) {
+                    let line = String::from_utf8_lossy(&raw).trim().to_string();
+                    raw.clear();
                     if line.is_empty() {
                         continue;
                     }
