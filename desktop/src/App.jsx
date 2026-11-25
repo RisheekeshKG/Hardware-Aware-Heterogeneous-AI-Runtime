@@ -4,7 +4,7 @@ import { machineSummary, plural } from './helpers.js'
 import { BenchmarksPage, NewBenchmarkDialog } from './pages/Benchmarks.jsx'
 import { AddDeviceDialog, DeviceDetailPage, DevicesPage, PairingPrompt } from './pages/Devices.jsx'
 import { OverviewPage } from './pages/Overview.jsx'
-import { NewScriptDialog, ScriptsPage } from './pages/Scripts.jsx'
+import { ScriptsPage } from './pages/Scripts.jsx'
 import { SettingsPage } from './pages/Settings.jsx'
 import { SetupGate } from './pages/Setup.jsx'
 import { ConfirmProvider, NavigationProvider, RuntimeProvider, ToastProvider, useNavigation, useRuntime } from './state.jsx'
@@ -40,7 +40,7 @@ function Shell() {
   const Page = pages[page] || OverviewPage
   // A new page starts at the top, not wherever the previous one was scrolled to.
   useEffect(() => { window.scrollTo(0, 0) }, [page, deviceId])
-  return <div className="app-shell">
+  return <div className={`app-shell ${page === 'scripts' ? 'ide-mode' : ''}`}>
     <Sidebar />
     <main className="main-content">
       <Topbar />
@@ -96,7 +96,7 @@ function Sidebar() {
     {navGroups.map((group) => <Fragment key={group.id}>
       <div className={`nav-group-label ${group.id === 'devtools' ? 'devtools' : ''}`}>{group.label}</div>
       <nav className="main-nav" aria-label={`${group.label} navigation`}>
-        {navItems.filter((item) => item.group === group.id).map(({ id, label, Icon }) => <button key={id} className={`nav-item ${activePage === id ? 'active' : ''}`} aria-current={activePage === id ? 'page' : undefined} onClick={() => go(id)}><span className="nav-icon"><Icon /></span><span>{label}</span></button>)}
+        {navItems.filter((item) => item.group === group.id).map(({ id, label, Icon }) => <button key={id} title={label} className={`nav-item ${activePage === id ? 'active' : ''}`} aria-current={activePage === id ? 'page' : undefined} onClick={() => go(id)}><span className="nav-icon"><Icon /></span><span>{label}</span></button>)}
       </nav>
     </Fragment>)}
     <div className="sidebar-spacer" />
@@ -129,7 +129,7 @@ function ConnectionBanner() {
   return <div className="api-error" role="alert"><span className="status-dot error" /><div><strong>HAR can't connect right now</strong><span>{error}</span></div><Button variant="text" onClick={refresh}>Try again</Button></div>
 }
 
-const modals = { benchmark: NewBenchmarkDialog, script: NewScriptDialog, connect: AddDeviceDialog }
+const modals = { benchmark: NewBenchmarkDialog, connect: AddDeviceDialog }
 
 function ModalHost() {
   const { modal, closeModal } = useNavigation()

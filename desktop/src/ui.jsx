@@ -44,7 +44,7 @@ export function Modal({ eyebrow, title, onClose, onSubmit, className = '', role 
     <Box ref={boxRef} className={`launcher-modal ${className}`.trim()} role={role} aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onSubmit={onSubmit}>
       <div className="modal-header">
         <div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h2 id={titleId}>{title}</h2></div>
-        {onClose && <IconButton className="close-button" label="Close" icon={<CloseIcon />} onClick={onClose} />}
+        {onClose && <IconButton className="close-button" label="Close" icon={<CloseLargeIcon />} onClick={onClose} />}
       </div>
       {children}
     </Box>
@@ -155,7 +155,6 @@ export function StatusBadge({ status }) {
   return <span className={`status-badge ${status}`}><span className="status-dot" />{status}</span>
 }
 
-export function Placement({ label, value, accent }) { return <div><span>{label}</span><strong className={accent || ''}>{value}</strong></div> }
 export function Metric({ label, value }) { return <div className="small-metric"><span>{label}</span><strong>{value}</strong></div> }
 export function StatCard({ label, value, detail, accent }) { return <div className={`stat-card ${accent}`}><span className="eyebrow">{label}</span><strong>{value}</strong><span>{detail}</span></div> }
 
@@ -174,13 +173,20 @@ export function MemoryBar({ memory, backend, large = false }) {
 const Svg = ({ children, size = 16 }) => <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{children}</svg>
 
 export const RefreshIcon = () => <Svg><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9" /><path d="M13.5 2.5v3h-3" /></Svg>
-const CloseIcon = () => <Svg><path d="M4 4l8 8M12 4l-8 8" /></Svg>
+const CloseLargeIcon = () => <Svg><path d="M4 4l8 8M12 4l-8 8" /></Svg>
 const ChevronDownIcon = () => <Svg size={12}><path d="M4 6l4 4 4-4" /></Svg>
 export const ArrowRightIcon = () => <Svg size={14}><path d="M3 8h10M9 4l4 4-4 4" /></Svg>
 export const PlusIcon = () => <Svg size={14}><path d="M8 3v10M3 8h10" /></Svg>
 export const StopIcon = () => <Svg size={14}><rect x="4" y="4" width="8" height="8" rx="1" /></Svg>
 export const CopyIcon = () => <Svg size={14}><rect x="5.5" y="5.5" width="8" height="8" rx="1" /><path d="M10.5 3.5v-.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h.5" /></Svg>
 export const DownIcon = () => <Svg size={14}><path d="M8 3v10M4 9l4 4 4-4" /></Svg>
+export const PlayIcon = () => <Svg size={14}><path d="M5 3.5v9l7-4.5z" fill="currentColor" /></Svg>
+export const FileIcon = () => <Svg size={14}><path d="M4 1.5h5l3 3v10H4z" /><path d="M9 1.5v3h3" /></Svg>
+export const PencilIcon = () => <Svg size={13}><path d="M10.5 2.5l3 3-8 8H2.5v-3z" /></Svg>
+export const TrashIcon = () => <Svg size={13}><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 9h5.8l.6-9" /></Svg>
+export const OpenFileIcon = () => <Svg size={14}><path d="M2 4h4l1.5 1.5H14V13H2z" /><path d="M8 8v3.5M6.5 9.5L8 8l1.5 1.5" /></Svg>
+export const CloseIcon = () => <Svg size={12}><path d="M4 4l8 8M12 4l-8 8" /></Svg>
+export const ChevronIcon = () => <Svg size={12}><path d="M4 6l4 4 4-4" /></Svg>
 
 // Navigation
 export const OverviewIcon = () => <Svg><rect x="2.5" y="2.5" width="4.5" height="4.5" /><rect x="9" y="2.5" width="4.5" height="4.5" /><rect x="2.5" y="9" width="4.5" height="4.5" /><rect x="9" y="9" width="4.5" height="4.5" /></Svg>

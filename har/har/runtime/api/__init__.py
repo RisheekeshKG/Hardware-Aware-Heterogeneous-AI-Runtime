@@ -34,6 +34,7 @@ from . import info as _info_routes  # noqa: F401
 from . import trust as _trust_routes  # noqa: F401
 from . import scripts as _scripts_routes  # noqa: F401
 from . import benchmarks as _benchmarks_routes  # noqa: F401
+from . import workspace as _workspace_routes  # noqa: F401
 
 
 __all__ = [

@@ -60,6 +60,13 @@ export const api = {
   startScript: (body) => post('/api/scripts', body),
   stopScript: (scriptId) => post(`/api/scripts/${id(scriptId)}/stop`),
 
+  // Your script files on this computer (~/HAR/scripts).
+  workspace: () => request('/api/workspace'),
+  readFile: (name) => request(`/api/workspace/files/${id(name)}`),
+  saveFile: (name, content) => request(`/api/workspace/files/${id(name)}`, { method: 'PUT', body: { content } }),
+  renameFile: (name, newName) => post(`/api/workspace/files/${id(name)}/rename`, { new_name: newName }),
+  deleteFile: (name) => request(`/api/workspace/files/${id(name)}`, { method: 'DELETE' }),
+
   startRun: (body) => post('/api/runs', body),
 
   connectNode: (body) => post('/api/nodes/connect', body),

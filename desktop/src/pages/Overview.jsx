@@ -2,13 +2,13 @@
 import { computers, formatElapsed, isActive, machineSummary, nodeLabel, plural, scriptDuration } from '../helpers.js'
 import { ScriptRow, useStopScript } from '../pages/Scripts.jsx'
 import { useNavigation, useNow, useRuntime } from '../state.jsx'
-import { ArrowRightIcon, BackendBadge, Button, EmptyState, IconButton, PageHeader, PlusIcon, SectionHeading, StatCard, StatusBadge, StopIcon } from '../ui.jsx'
+import { ArrowRightIcon, BackendBadge, Button, EmptyState, IconButton, PageHeader, PlusIcon, ScriptsIcon, SectionHeading, StatCard, StatusBadge, StopIcon } from '../ui.jsx'
 
 const pad = (count) => String(count).padStart(2, '0')
 
 export function OverviewPage() {
   const { scripts, devices, nodes, system } = useRuntime()
-  const { go, openModal } = useNavigation()
+  const { go } = useNavigation()
   const active = scripts.filter((script) => isActive(script.status))
   const recent = scripts.filter((script) => !isActive(script.status)).slice(0, 6)
   const queued = active.filter((script) => script.status === 'queued').length
@@ -17,7 +17,7 @@ export function OverviewPage() {
   const summary = machineSummary(devices, nodes)
   const runtime = system?.host?.runtime
   return <>
-    <PageHeader eyebrow="HAR" title="Overview" description="What's running, and which computers can take work." action={<Button variant="primary" icon={<PlusIcon />} onClick={() => openModal('script')}>New script</Button>} />
+    <PageHeader eyebrow="HAR" title="Overview" description="What's running, and which computers can take work." action={<Button variant="primary" icon={<ScriptsIcon />} onClick={() => go('scripts')}>Open editor</Button>} />
     <section className="stat-grid">
       <StatCard label="Running now" value={pad(active.length - queued)} detail={queued ? `${queued} waiting for a slot` : 'Nothing waiting'} accent="lime" />
       <StatCard label="Computers ready" value={pad(summary.machinesReady)} detail={`${plural(summary.runtimesReady, 'backend')} across them`} accent="blue" />
@@ -32,14 +32,14 @@ export function OverviewPage() {
       <SectionHeading eyebrow="RECENT" title="Recent scripts" action={scripts.length ? <Button variant="text" iconAfter={<ArrowRightIcon />} onClick={() => go('scripts')}>All scripts</Button> : null} />
       {recent.length
         ? <div className="script-list">{recent.map((script) => <ScriptRow key={script.id} script={script} />)}</div>
-        : <EmptyState title="No finished scripts yet" detail="Write a Python script and pick a computer to run it on. Its output and exit code show up here." action="New script" onAction={() => openModal('script')} />}
+        : <EmptyState title="No finished scripts yet" detail="Write a Python script and pick a computer to run it on. Its output and exit code show up here." action="Open editor" onAction={() => go('scripts')} />}
     </section>
   </>
 }
 
 function RunningPanel({ scripts }) {
   const { nodes } = useRuntime()
-  const { go, openModal } = useNavigation()
+  const { go } = useNavigation()
   const now = useNow(scripts.length > 0)
   const stop = useStopScript()
   return <article className="panel running-panel">
@@ -54,7 +54,7 @@ function RunningPanel({ scripts }) {
           </button>
           <IconButton className="stop-icon" label={`Stop ${script.filename}`} icon={<StopIcon />} disabled={script.stop_requested} onClick={() => stop(script)} />
         </li>)}</ul>
-      : <><p className="empty-copy">HAR is idle. Start a script and you can watch its output here while it runs.</p><Button icon={<PlusIcon />} onClick={() => openModal('script')}>New script</Button></>}
+      : <><p className="empty-copy">HAR is idle. Start a script and you can watch its output here while it runs.</p><Button icon={<PlusIcon />} onClick={() => go('scripts')}>Open editor</Button></>}
   </article>
 }
 

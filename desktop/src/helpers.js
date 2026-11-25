@@ -18,13 +18,6 @@ export const formatDuration = (seconds) => {
 
 export const formatDate = (value) => value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Unavailable'
 
-export function formatSecondsShort(seconds) {
-  if (seconds == null) return '-'
-  if (seconds < 0.001) return `${(seconds * 1e6).toFixed(0)} µs`
-  if (seconds < 1) return `${(seconds * 1e3).toFixed(1)} ms`
-  return `${seconds.toFixed(2)} s`
-}
-
 // "just now", "4 min ago", "3 h ago", then the date.
 export function formatRelative(value, now = Date.now()) {
   if (!value) return ''
@@ -51,7 +44,7 @@ export function formatElapsed(seconds) {
 // name. It is never "another computer", so every remote-node list filters it out here.
 const THIS_DEVICE = 'This device'
 
-export const remoteNodes = (nodes) => (nodes || []).filter((node) => node.name !== THIS_DEVICE)
+const remoteNodes = (nodes) => (nodes || []).filter((node) => node.name !== THIS_DEVICE)
 
 const availableCapabilities = (node) => (node.capabilities || []).filter((capability) => capability.available !== false)
 
@@ -153,26 +146,6 @@ export function workloadDetail(request) {
   if (request.workload === 'image') return `batch ${request.batch_size} · ${request.image_size} px`
   if (request.workload === 'tree') return `depth ${request.depth} · ${request.traversal_count} walks`
   return `${request.size} × ${request.size}`
-}
-
-export function scriptTimings(script) {
-  const parse = (value) => value ? new Date(value).getTime() : null
-  const created = parse(script.created_at)
-  const started = parse(script.started_at)
-  const finished = parse(script.finished_at)
-  const updated = parse(script.updated_at)
-  const toSec = (ms) => (Number.isFinite(ms) && ms >= 0 ? ms / 1000 : null)
-  const diff = (end, start) => (end != null && start != null ? toSec(end - start) : null)
-  const total = diff(finished ?? updated, created)
-  const queue = diff(started ?? finished ?? updated, created)
-  const execute = script.remote_execute_seconds != null
-    ? script.remote_execute_seconds
-    : (started != null ? diff(finished ?? updated, started) : null)
-  const isRemote = Boolean(script.target_node && script.target_node !== 'local')
-  const transport = isRemote && total != null && execute != null && queue != null
-    ? Math.max(total - execute - queue, 0)
-    : (isRemote ? null : 0)
-  return { total, queue, execute, transport, isRemote }
 }
 
 // Seconds a script has been going (or went): live while active, final once finished.
