@@ -113,9 +113,20 @@
   font: 10px var(--font-mono);
 }
 
-.script-output-head span:last-child {
+.output-phase {
+  margin-left: auto;
   color: var(--text-faint);
   font: 9px var(--font-mono);
+}
+
+.output-phase.live,
+.output-phase.polling {
+  color: var(--accent-text-muted);
+}
+
+.output-phase.reconnecting,
+.output-phase.gone {
+  color: var(--status-warning);
 }
 
 .script-output {
@@ -392,4 +403,48 @@
   .script-history .script-row-outcome {
     display: block;
   }
+}
+
+.script-output-frame {
+  position: relative;
+}
+
+.script-output .out-stderr {
+  color: var(--status-error-text);
+}
+
+.script-output .out-har {
+  color: var(--text-muted);
+}
+
+.script-output .out-placeholder {
+  color: var(--text-muted);
+}
+
+.script-output:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.jump-latest {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+  background: var(--accent-bg);
+  font: 10px var(--font-mono);
+  box-shadow: 0 6px 18px var(--shadow-soft);
+}
+
+.jump-latest:hover {
+  border-color: var(--accent);
+}
+
+.script-detail-actions .danger-button {
+  padding: 7px 12px;
 }

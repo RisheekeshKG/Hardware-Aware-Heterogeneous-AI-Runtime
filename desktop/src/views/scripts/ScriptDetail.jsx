@@ -1,8 +1,12 @@
 import { useRuntime } from '../../app/RuntimeProvider.jsx'
+import { Button } from '../../components/Button.jsx'
+import { ScriptOutput } from '../../components/ScriptOutput.jsx'
 import { BackendBadge, StatusBadge } from '../../components/badges.jsx'
+import { StopIcon } from '../../components/icons.jsx'
 import { Metric, Placement } from '../../components/metrics.jsx'
 import { useNow } from '../../hooks/useNow.js'
 import { useScriptStream } from '../../hooks/useScriptStream.js'
+import { useStopScript } from '../../hooks/useStopScript.js'
 import { backendTitle, nodeLabel, remoteNodes } from '../../lib/devices.js'
 import { formatBytes, formatDate, formatElapsed, formatSecondsShort } from '../../lib/format.js'
 import { isActive, scriptDuration, scriptOutcome, scriptTimings } from '../../lib/runs.js'
@@ -15,16 +19,20 @@ function targetBackends(script, devices, nodes) {
 
 export function ScriptDetail({ script }) {
   const { devices, nodes, cpuInfo } = useRuntime()
-  const { liveOutput } = useScriptStream(script.id)
+  const stream = useScriptStream(script.id)
+  const stop = useStopScript()
   const now = useNow(isActive(script.status))
-  const output = liveOutput || script.output || ''
+  const output = stream.chunks.map((chunk) => chunk.text).join('')
   const timings = scriptTimings(script)
   const target = targetBackends(script, devices, nodes)
   const running = isActive(script.status)
   return <section className="panel script-detail" aria-label={`Run of ${script.filename}`}>
     <div className="script-detail-head">
       <div><div className="eyebrow">SCRIPT RUN · {script.id}</div><h2>{script.filename}</h2></div>
-      <div className="script-detail-actions"><StatusBadge status={script.status} /></div>
+      <div className="script-detail-actions">
+        {running && <Button variant="danger" icon={<StopIcon />} disabled={script.stop_requested} onClick={() => stop(script)}>{script.stop_requested ? 'Stopping…' : 'Stop'}</Button>}
+        <StatusBadge status={script.status} />
+      </div>
     </div>
     <div className="placement-grid">
       <Placement label="Computer" value={nodeLabel(script.target_node, nodes)} />
@@ -35,8 +43,7 @@ export function ScriptDetail({ script }) {
     {script.args?.length ? <div className="script-args"><span className="eyebrow">ARGUMENTS</span><code>{script.args.join(' ')}</code></div> : null}
     {/* For a crash the error is the stderr tail, already in the output; show it only when it adds something (timeouts, disconnects). */}
     {script.error && script.status !== 'completed' && !output.includes(script.error.trim().slice(-120)) ? <div className="form-error script-error">{script.error}</div> : null}
-    <div className="script-output-head"><span className="eyebrow">OUTPUT</span><span>{output ? `${output.length.toLocaleString()} chars${running ? ' · streaming' : ''}` : running ? 'Waiting for output…' : ''}</span></div>
-    <pre className="script-output">{output || (running ? 'The script has started. Anything it prints shows up here as it happens.' : 'This script printed nothing.')}</pre>
+    <ScriptOutput stream={stream} running={running} />
     <details className="detail-section">
       <summary><span className="eyebrow">TIMING</span><span>{formatSecondsShort(timings.total)} total</span></summary>
       <div className="timings-grid">

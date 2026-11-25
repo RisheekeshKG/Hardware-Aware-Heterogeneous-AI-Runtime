@@ -1,13 +1,14 @@
 import { useNavigation } from '../../app/NavigationProvider.jsx'
 import { useRuntime } from '../../app/RuntimeProvider.jsx'
-import { Button } from '../../components/Button.jsx'
+import { Button, IconButton } from '../../components/Button.jsx'
 import { EmptyState } from '../../components/EmptyState.jsx'
 import { PageHeader } from '../../components/PageHeader.jsx'
 import { SectionHeading } from '../../components/SectionHeading.jsx'
 import { BackendBadge, StatusBadge } from '../../components/badges.jsx'
-import { ArrowRightIcon, PlusIcon } from '../../components/icons.jsx'
+import { ArrowRightIcon, PlusIcon, StopIcon } from '../../components/icons.jsx'
 import { StatCard } from '../../components/metrics.jsx'
 import { useNow } from '../../hooks/useNow.js'
+import { useStopScript } from '../../hooks/useStopScript.js'
 import { computers, machineSummary, nodeLabel, plural } from '../../lib/devices.js'
 import { formatElapsed } from '../../lib/format.js'
 import { isActive, scriptDuration } from '../../lib/runs.js'
@@ -50,16 +51,18 @@ function RunningPanel({ scripts }) {
   const { nodes } = useRuntime()
   const { go, openModal } = useNavigation()
   const now = useNow(scripts.length > 0)
+  const stop = useStopScript()
   return <article className="panel running-panel">
     <SectionHeading compact eyebrow="RUNNING NOW" title={scripts.length ? plural(scripts.length, 'script') : 'Nothing is running'} />
     {scripts.length
-      ? <ul className="running-list">{scripts.map((script) => <li key={script.id}>
-          <button type="button" className="running-item" onClick={() => go('scripts', { scriptId: script.id })}>
+      ? <ul className="running-list">{scripts.map((script) => <li key={script.id} className="running-item">
+          <button type="button" className="running-item-open" onClick={() => go('scripts', { scriptId: script.id })}>
             <span className={`workload-pulse ${script.status}`} />
-            <span className="running-item-main"><strong>{script.filename}</strong><span>{nodeLabel(script.target_node, nodes)}</span></span>
+            <span className="running-item-main"><strong>{script.filename}</strong><span>{nodeLabel(script.target_node, nodes)}{script.stop_requested ? ' · stopping…' : ''}</span></span>
             <span className="running-item-time">{formatElapsed(scriptDuration(script, now))}</span>
             <StatusBadge status={script.status} />
           </button>
+          <IconButton className="stop-icon" label={`Stop ${script.filename}`} icon={<StopIcon />} disabled={script.stop_requested} onClick={() => stop(script)} />
         </li>)}</ul>
       : <><p className="empty-copy">HAR is idle. Start a script and you can watch its output here while it runs.</p><Button icon={<PlusIcon />} onClick={() => openModal('script')}>New script</Button></>}
   </article>
