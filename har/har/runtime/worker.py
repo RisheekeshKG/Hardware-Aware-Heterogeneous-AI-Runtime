@@ -327,6 +327,7 @@ def _execute_script(record: WorkerScriptRun) -> None:
 
     if not record.begin_running():
         return  # stopped while queued
+    final = "failed"  # applied last, after finished_at, so a final status always has an end time
     try:
         with tempfile.TemporaryDirectory(prefix="har-worker-job-") as directory:
             result = run_script_in_subprocess(
@@ -350,20 +351,21 @@ def _execute_script(record: WorkerScriptRun) -> None:
             record.execute_seconds = result["execute_seconds"]
             record.timed_out = bool(result["timed_out"])
             if result.get("stopped"):
-                record.status = "stopped"
+                final = "stopped"
             elif result["timed_out"]:
-                record.status = "failed"
+                final = "failed"
                 record.error = f"Script exceeded {record.request.timeout_seconds:g}s"
             elif result["exit_code"] == 0:
-                record.status = "completed"
+                final = "completed"
             else:
-                record.status = "failed"
+                final = "failed"
                 record.error = result["stderr"][-4000:] or f"Exit code {result['exit_code']}"
     except Exception as error:
         record.error = str(error)
-        record.status = "failed"
+        final = "failed"
     finally:
         record.finished_at = datetime.now(timezone.utc).isoformat()
+        record.status = final
 
 
 @worker_app.get("/worker/health")

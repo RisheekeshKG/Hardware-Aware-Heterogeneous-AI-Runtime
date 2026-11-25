@@ -131,6 +131,7 @@ def run_script_in_process(record: ScriptRecord) -> None:
 
     if not record.begin_running():
         return  # stopped while queued; request_stop already finalised the record
+    final = "failed"  # applied last, after finished_at, so a final status always has an end time
     try:
         with tempfile.TemporaryDirectory(prefix="har-job-") as directory:
             result = run_script_in_subprocess(
@@ -154,21 +155,22 @@ def run_script_in_process(record: ScriptRecord) -> None:
             record.timed_out = bool(result["timed_out"])
             record.remote_execute_seconds = result["execute_seconds"]
             if result.get("stopped"):
-                record.status = "stopped"
+                final = "stopped"
             elif result["timed_out"]:
-                record.status = "failed"
+                final = "failed"
                 record.error = f"Script exceeded {record.request.timeout_seconds:g}s"
             elif result["exit_code"] == 0:
-                record.status = "completed"
+                final = "completed"
             else:
-                record.status = "failed"
+                final = "failed"
                 record.error = result["stderr"][-4000:] or f"Exit code {result['exit_code']}"
     except Exception as error:
         record.error = str(error)
-        record.status = "failed"
+        final = "failed"
     finally:
         record.finished_at = datetime.now(timezone.utc).isoformat()
         record.updated_at = record.finished_at
+        record.status = final
 
 
 def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
@@ -179,6 +181,7 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
     if not record.begin_running():
         return  # stopped while queued; nothing was sent to the worker
     node_id = node.get("node_id", "")
+    final = "failed"  # applied last, after finished_at, so a final status always has an end time
     try:
         with httpx.Client(timeout=30.0) as client:
             submit_url = f"{node['base_url']}/worker/scripts"
@@ -214,6 +217,7 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                 if record.cancel_event.is_set() and stop_deadline is None:
                     stop_deadline = time.monotonic() + REMOTE_STOP_CONFIRM_SECONDS
                     if not _ask_worker_to_stop(client, node, node_id, worker_run_id, record):
+                        final = "stopped"
                         return
 
                 drain_chunks()
@@ -233,7 +237,7 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                 if worker_record["status"] not in ACTIVE_STATUSES:
                     # Lines printed between the last drain and the exit would otherwise be lost.
                     drain_chunks()
-                    record.status = worker_record["status"]
+                    final = worker_record["status"]
                     # Prefer the worker's monotonic execute_seconds — immune to clock skew between
                     # host and worker. Only fall back to subtracting ISO timestamps if the worker
                     # is older than 1.0.2 and didn't send it.
@@ -253,7 +257,7 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                     record.timed_out = bool(worker_record.get("timed_out", False))
                     break
                 if stop_deadline is not None and time.monotonic() > stop_deadline:
-                    record.status = "stopped"
+                    final = "stopped"
                     record.error = (
                         f"Asked the other computer to stop this script, but it didn't confirm within "
                         f"{REMOTE_STOP_CONFIRM_SECONDS:g} s. It may still be running there."
@@ -261,16 +265,18 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                     break
                 time.sleep(0.25)
     except Exception as error:
-        record.status = "failed"
+        final = "failed"
         record.error = f"Remote device '{record.request.target_node}' failed: {error}"
     finally:
         record.finished_at = datetime.now(timezone.utc).isoformat()
         record.updated_at = record.finished_at
+        record.status = final
         node["active_job"] = None
 
 
 def _ask_worker_to_stop(client, node: dict[str, Any], node_id: str, worker_run_id: str, record: ScriptRecord) -> bool:
-    """Send the signed stop request. Returns False when the host should stop polling now.
+    """Send the signed stop request. Returns False when the host should stop polling now
+    (the caller then marks the run stopped).
 
     A 404 or 405 here means the worker runs a HAR version without the stop endpoint
     (a new worker answers 404 only for an unknown run, which we treat the same way:
@@ -284,7 +290,6 @@ def _ask_worker_to_stop(client, node: dict[str, Any], node_id: str, worker_run_i
         record.append_chunk("stderr", f"[har] Could not reach the other computer to stop the script: {error}\n")
         return True  # keep polling; the confirm deadline ends this if it never answers
     if response.status_code in {404, 405}:
-        record.status = "stopped"
         record.error = (
             "The other computer's HAR version can't stop scripts. Update HAR there. "
             "The script may still be running on that computer."
