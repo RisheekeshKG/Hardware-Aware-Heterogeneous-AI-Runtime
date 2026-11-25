@@ -33,6 +33,17 @@ def test_save_then_read_round_trips(client):
     assert "train.py" in names
 
 
+def test_line_endings_are_saved_exactly(client, tmp_path):
+    """Windows text mode would turn LF into CRLF on disk; files must hold what was typed."""
+
+    client.put("/api/workspace/files/lf.py", json={"content": "a\nb\n"})
+    client.put("/api/workspace/files/crlf.py", json={"content": "a\r\nb\r\n"})
+    folder = tmp_path / "scripts"
+    assert (folder / "lf.py").read_bytes() == b"a\nb\n"
+    assert (folder / "crlf.py").read_bytes() == b"a\r\nb\r\n"
+    assert client.get("/api/workspace/files/crlf.py").json()["content"] == "a\r\nb\r\n"
+
+
 @pytest.mark.parametrize("name", ["../escape.py", "notes.txt", ".py", "a%2Fb.py"])
 def test_rejects_names_outside_the_folder_or_not_python(client, name):
     assert client.put(f"/api/workspace/files/{name}", json={"content": "x"}).status_code in {404, 422}

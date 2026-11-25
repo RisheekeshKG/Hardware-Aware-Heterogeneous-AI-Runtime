@@ -75,7 +75,7 @@ def list_workspace() -> dict[str, Any]:
     created = not folder.exists()
     folder.mkdir(parents=True, exist_ok=True)
     if created:
-        (folder / EXAMPLE_NAME).write_text(EXAMPLE, encoding="utf-8")
+        (folder / EXAMPLE_NAME).write_text(EXAMPLE, encoding="utf-8", newline="")
     files = sorted((p for p in folder.glob("*.py") if p.is_file()), key=lambda p: p.name.lower())
     return {"path": str(folder), "files": [_info(p) for p in files]}
 
@@ -85,7 +85,9 @@ def read_file(name: str) -> dict[str, Any]:
     path = _file_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail=f"{name} doesn't exist")
-    return {**_info(path), "content": path.read_text(encoding="utf-8", errors="replace")}
+    # newline="" keeps the file's own line endings (Windows text mode would rewrite them).
+    with path.open(encoding="utf-8", errors="replace", newline="") as handle:
+        return {**_info(path), "content": handle.read()}
 
 
 @app.put("/api/workspace/files/{name}")
@@ -95,7 +97,7 @@ def write_file(name: str, body: FileContent) -> dict[str, Any]:
     path = _file_path(name)
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.saving")
-    temp.write_text(body.content, encoding="utf-8")
+    temp.write_text(body.content, encoding="utf-8", newline="")  # save exactly what was typed
     os.replace(temp, path)
     return _info(path)
 
