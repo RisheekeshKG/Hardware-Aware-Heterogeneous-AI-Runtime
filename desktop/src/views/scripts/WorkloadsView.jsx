@@ -4,6 +4,7 @@ import { EmptyState } from '../../components/EmptyState.jsx'
 import { PageHeader } from '../../components/PageHeader.jsx'
 import { ScriptDetail } from './ScriptDetail.jsx'
 import { ScriptRow } from './ScriptRow.jsx'
+import { ArrowRightIcon, PlusIcon } from '../../components/icons.jsx'
 
 export function WorkloadsView() {
   const { scripts } = useRuntime()
@@ -11,12 +12,12 @@ export function WorkloadsView() {
   const onScriptLaunch = () => openModal('script')
   const selectedScript = scripts.find((script) => script.id === selectedScriptId) || null
   return <>
-    <PageHeader eyebrow="SCRIPTS" title="Run Python" description="Write a Python script, pick a device, see what it printed and whether it finished cleanly." action={<button className="primary-button" onClick={onScriptLaunch}><span>+</span> New script</button>} />
+    <PageHeader eyebrow="SCRIPTS" title="Run Python" description="Write a Python script, pick a device, see what it printed and whether it finished cleanly." action={<button className="primary-button" onClick={onScriptLaunch}><PlusIcon /> New script</button>} />
     <section className="panel launch-card">
       <div className="eyebrow">GET STARTED</div>
       <h2>Write Python in HAR</h2>
       <p>Type your script, pick where it runs, see its stdout and exit code here. @har.offload-decorated functions get routed per call; the rest runs in-process.</p>
-      <button className="large-launch" onClick={onScriptLaunch}><span className="launch-icon">-&gt;</span><span><strong>Write a new script</strong><small>Opens an in-app editor; you can also load an existing .py file to seed it</small></span><span className="arrow">+</span></button>
+      <button className="large-launch" onClick={onScriptLaunch}><span className="launch-icon"><ArrowRightIcon /></span><span><strong>Write a new script</strong><small>Opens an in-app editor; you can also load an existing .py file to seed it</small></span><span className="arrow"><PlusIcon /></span></button>
       <div className="policy-note"><span className="status-dot" /><span>Scripts run in a temporary job folder on the selected device.</span></div>
     </section>
     <section className="section-block">

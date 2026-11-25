@@ -1,3 +1,6 @@
+import { IconButton } from './Button.jsx'
+import { RefreshIcon } from './icons.jsx'
+
 export function RefreshButton({ onClick, title = 'Refresh' }) {
-  return <button type="button" className="icon-button section-refresh" onClick={onClick} aria-label={title} title={title}>R</button>
+  return <IconButton className="section-refresh" onClick={onClick} label={title} icon={<RefreshIcon />} />
 }

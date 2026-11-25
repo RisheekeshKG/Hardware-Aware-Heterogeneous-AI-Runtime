@@ -6,7 +6,11 @@ import { api } from '../../api/endpoints.js'
 import { useNavigation } from '../../app/NavigationProvider.jsx'
 import { useRuntime } from '../../app/RuntimeProvider.jsx'
 import { useToast } from '../../app/ToastProvider.jsx'
+import { Button } from '../../components/Button.jsx'
 import { Dropdown } from '../../components/Dropdown.jsx'
+import { Field } from '../../components/Field.jsx'
+import { Modal, ModalActions } from '../../components/Modal.jsx'
+import { ArrowRightIcon } from '../../components/icons.jsx'
 import { computerOptions } from '../../lib/devices.js'
 
 export const DEFAULT_SCRIPT = `import har
@@ -59,14 +63,13 @@ export function ScriptLauncher({ onClose }) {
 
   const lineCount = content.split('\n').length
 
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal editor-modal" onSubmit={submit}>
-    <div className="modal-header"><div><div className="eyebrow">NEW SCRIPT</div><h2>Write Python</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
+  return <Modal eyebrow="NEW SCRIPT" title="Write Python" onClose={onClose} onSubmit={submit} className="editor-modal">
     <p>Type Python here (or load a .py file to seed it). HAR copies the code to the selected computer and runs it in a temporary job folder.</p>
     <div className="editor-head">
-      <label className="editor-filename">Filename<input value={filename} onChange={(event) => setFilename(event.target.value)} /></label>
-      <label className="editor-load secondary-button" title="Load a .py file into the editor">Load file...<input type="file" accept=".py,text/x-python" onChange={loadFile} hidden /></label>
+      <Field label="Filename" className="editor-filename"><input value={filename} onChange={(event) => setFilename(event.target.value)} spellCheck={false} /></Field>
+      <label className="editor-load secondary-button" title="Load a .py file into the editor">Load file…<input type="file" accept=".py,text/x-python" onChange={loadFile} hidden /></label>
     </div>
-    <label>Code <span className="editor-meta">{lineCount} line{lineCount === 1 ? '' : 's'} · {content.length} chars</span></label>
+    <div className="field-label code-label">Code <span className="editor-meta">{lineCount} line{lineCount === 1 ? '' : 's'} · {content.length} chars</span></div>
     <div className="code-editor-wrap">
       <CodeMirror
         value={content}
@@ -77,10 +80,10 @@ export function ScriptLauncher({ onClose }) {
         basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: false, autocompletion: true, bracketMatching: true, indentOnInput: true, highlightSelectionMatches: true }}
       />
     </div>
-    <label>Computer<Dropdown ariaLabel="Target computer" value={targetNode} onChange={setTargetNode} options={computerOptions(nodes)} /></label>
-    <label>Arguments <span className="optional">OPTIONAL</span><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" /></label>
+    <Field label="Computer"><Dropdown ariaLabel="Target computer" value={targetNode} onChange={setTargetNode} options={computerOptions(nodes)} /></Field>
+    <Field label="Arguments" optional><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" spellCheck={false} /></Field>
     <div className="advanced-note">The script runs with the Python packages already installed on the selected computer. @har.offload-decorated functions get routed by HAR; everything else runs in-process as usual.</div>
     {error && <div className="form-error">{error}</div>}
-    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button">Run script <span>-&gt;</span></button></div>
-  </form></div>
+    <ModalActions><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" iconAfter={<ArrowRightIcon />}>Run script</Button></ModalActions>
+  </Modal>
 }

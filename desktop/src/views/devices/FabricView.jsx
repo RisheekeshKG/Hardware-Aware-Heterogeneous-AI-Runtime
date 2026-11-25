@@ -8,6 +8,7 @@ import { DeviceCard } from './DeviceCard.jsx'
 import { RolePanel } from './RolePanel.jsx'
 import { TrustedHostsPanel } from './TrustedHostsPanel.jsx'
 import { WorkerConnectionPanel } from './WorkerConnectionPanel.jsx'
+import { PlusIcon } from '../../components/icons.jsx'
 
 export function FabricView() {
   const { devices, nodes, cpuInfo, session, refresh: onRefresh } = useRuntime()
@@ -18,5 +19,5 @@ export function FabricView() {
   const local = localAvailable.map((device) => ({ ...device, kind: 'ON THIS COMPUTER', state: 'online', name: deviceHeading(device, cpuInfo), detail: 'Ready to use' }))
   const remote = remoteNodes.flatMap((node) => node.capabilities.filter((device) => device.available !== false).map((device) => ({ ...device, kind: `OTHER COMPUTER / ${node.name}`, state: node.status, name: deviceHeading(device), detail: node.status === 'online' ? 'Ready to use' : 'Not responding', node_id: node.node_id, memory: device.memory || {} })))
   const all = [...local, ...remote]
-  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><span>+</span> Add device</button></div>} /><RolePanel />{isWorker && <WorkerConnectionPanel />}{isWorker && <TrustedHostsPanel />}<div className="fabric-banner"><div><span className="status-dot" /><strong>{plural(machinesReady, 'device')} available</strong><span>{plural(runtimesReady, 'runtime')} across {plural(machineCount, 'machine')}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
+  return <><PageHeader eyebrow="DEVICES" title="Your devices" description="See which computers can help with your tasks." action={<div className="header-actions">{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh devices" />}<button className="primary-button" onClick={onConnect}><PlusIcon /> Add device</button></div>} /><RolePanel />{isWorker && <WorkerConnectionPanel />}{isWorker && <TrustedHostsPanel />}<div className="fabric-banner"><div><span className="status-dot" /><strong>{plural(machinesReady, 'device')} available</strong><span>{plural(runtimesReady, 'runtime')} across {plural(machineCount, 'machine')}</span></div><span className="eyebrow">LIVE STATUS</span></div>{all.length ? <section className="device-grid">{all.map((device, index) => <DeviceCard key={`${device.name}-${index}`} device={device} />)}</section> : <EmptyState title="No devices found" detail="Start the HAR service and try again." action="Add device" onAction={onConnect} />}</>
 }

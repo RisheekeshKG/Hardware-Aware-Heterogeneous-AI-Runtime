@@ -1,5 +1,6 @@
 import { api } from '../../api/endpoints.js'
 import { BackendBadge, StatusBadge } from '../../components/badges.jsx'
+import { MemoryBar } from '../../components/MemoryBar.jsx'
 import { Metric } from '../../components/metrics.jsx'
 import { useAction } from '../../hooks/useAction.js'
 import { formatBytes } from '../../lib/format.js'
@@ -7,7 +8,7 @@ import { formatBytes } from '../../lib/format.js'
 export function DeviceCard({ device }) {
   const action = useAction()
   const onDisconnect = ({ node_id, name }) => action({
-    confirm: `Disconnect ${name}? HAR will stop sending tasks to this device.`,
+    confirm: { title: `Disconnect ${name}?`, message: 'HAR will stop sending tasks to it. Anything running there now is marked failed. You can add it again later.', confirmLabel: 'Disconnect' },
     run: () => api.disconnectNode(node_id).catch((error) => { if (error.status !== 404) throw error }),
     success: `${name} disconnected.`,
     failure: 'Could not disconnect',
@@ -19,7 +20,7 @@ export function DeviceCard({ device }) {
     <h2>{device.name}</h2>
     <p>{device.detail}</p>
     <div className="device-metrics"><Metric label="Status" value={device.available === false ? 'Not ready' : 'Ready'} /><Metric label="Free space" value={formatBytes(memory.available_bytes)} /></div>
-    <div className="util-track large"><div className={`backend-fill ${device.backend}`} style={{ width: memory.total_bytes && memory.available_bytes != null ? `${Math.min((memory.available_bytes / memory.total_bytes) * 100, 100)}%` : '0%' }} /></div>
+    <MemoryBar memory={memory} backend={device.backend} large />
     <div className="device-workload"><span>SPACE INFORMATION</span><strong>{memory.estimated ? 'Estimated' : memory.measured ? 'Measured' : 'Not available'}</strong></div>
   </article>
 }

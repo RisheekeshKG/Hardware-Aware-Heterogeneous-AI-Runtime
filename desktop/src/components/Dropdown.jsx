@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { ChevronDownIcon } from './icons.jsx'
 
 export function Dropdown({ value, onChange, options, placeholder = 'Choose...', disabled = false, ariaLabel }) {
   const [open, setOpen] = useState(false)
@@ -37,7 +38,7 @@ export function Dropdown({ value, onChange, options, placeholder = 'Choose...', 
   return <div className={`dropdown ${disabled ? 'disabled' : ''} ${open ? 'open' : ''}`} ref={rootRef}>
     <button type="button" className="dropdown-trigger" onClick={() => !disabled && setOpen((state) => !state)} onKeyDown={handleKey} disabled={disabled} aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel}>
       <span className="dropdown-label">{current ? current.label : placeholder}</span>
-      <span className="dropdown-chevron" aria-hidden>v</span>
+      <span className="dropdown-chevron"><ChevronDownIcon /></span>
     </button>
     {open && <ul className="dropdown-menu" role="listbox">
       {options.map((option, index) => <li key={option.value} role="option" aria-selected={option.value === value}>

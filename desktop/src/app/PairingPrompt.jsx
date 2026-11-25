@@ -1,5 +1,8 @@
 import { useState } from 'react'
 import { api } from '../api/endpoints.js'
+import { Button } from '../components/Button.jsx'
+import { Modal, ModalActions } from '../components/Modal.jsx'
+import { ArrowRightIcon } from '../components/icons.jsx'
 import { useRuntime } from './RuntimeProvider.jsx'
 import { useToast } from './ToastProvider.jsx'
 
@@ -18,5 +21,10 @@ export function PairingPrompt({ request }) {
     } catch (decideError) { setError(decideError.message); setBusy(false) }
   }
   const host = (() => { try { return new URL(request.coordinator).hostname } catch { return request.client_ip } })()
-  return <div className="modal-backdrop"><div className="launcher-modal pairing-modal" role="alertdialog" aria-labelledby="pairing-title"><div className="modal-header"><div><div className="eyebrow">CONNECTION REQUEST</div><h2 id="pairing-title">Allow another computer to use this one?</h2></div></div><p>The HAR host at <strong>{host}</strong> wants to send tasks to this computer. Accepting lets it run Python files and benchmarks here. Only accept computers you trust.</p><div className="setup-detail"><span>Request from</span><strong>{request.client_ip}</strong></div>{error && <div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary-button" onClick={() => decide('decline')} disabled={busy}>Decline</button><button type="button" className="primary-button" onClick={() => decide('accept')} disabled={busy}>Accept <span>-&gt;</span></button></div></div></div>
+  return <Modal role="alertdialog" eyebrow="CONNECTION REQUEST" title="Allow another computer to use this one?" className="pairing-modal">
+    <p>The HAR host at <strong>{host}</strong> wants to send tasks to this computer. Accepting lets it run Python files and benchmarks here. Only accept computers you trust.</p>
+    <div className="setup-detail"><span>Request from</span><strong>{request.client_ip}</strong></div>
+    {error && <div className="form-error">{error}</div>}
+    <ModalActions><Button onClick={() => decide('decline')} disabled={busy}>Decline</Button><Button variant="primary" onClick={() => decide('accept')} disabled={busy} iconAfter={<ArrowRightIcon />}>Accept</Button></ModalActions>
+  </Modal>
 }

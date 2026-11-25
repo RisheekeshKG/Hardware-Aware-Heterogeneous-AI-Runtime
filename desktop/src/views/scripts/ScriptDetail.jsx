@@ -6,6 +6,8 @@ import { useScriptStream } from '../../hooks/useScriptStream.js'
 import { backendLineLabel, targetMachine } from '../../lib/devices.js'
 import { formatBytes, formatDate, formatSecondsShort } from '../../lib/format.js'
 import { scriptTimings } from '../../lib/runs.js'
+import { IconButton } from '../../components/Button.jsx'
+import { CloseIcon } from '../../components/icons.jsx'
 
 export function ScriptDetail({ script, onClose }) {
   const { devices, nodes, cpuInfo, refresh: onRefresh } = useRuntime()
@@ -16,7 +18,7 @@ export function ScriptDetail({ script, onClose }) {
   const isLocal = script.target_node === 'local'
   const machineCpuInfo = isLocal ? cpuInfo : null
   return <section className="panel script-detail">
-    <div className="section-heading compact"><div><div className="eyebrow">SCRIPT DETAIL</div><h2>{script.filename}</h2></div><div className="script-detail-actions"><StatusBadge status={script.status} />{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh this script" />}{onClose && <button type="button" className="close-button" onClick={onClose} aria-label="Close script detail">X</button>}</div></div>
+    <div className="section-heading compact"><div><div className="eyebrow">SCRIPT DETAIL</div><h2>{script.filename}</h2></div><div className="script-detail-actions"><StatusBadge status={script.status} />{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh this script" />}{onClose && <IconButton className="close-button" onClick={onClose} label="Close script detail" icon={<CloseIcon />} />}</div></div>
     <div className="placement-grid">
       <Placement label="Machine" value={machine?.name || '-'} />
       <Placement label="Started" value={formatDate(script.created_at)} />

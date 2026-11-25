@@ -1,0 +1,117 @@
+.runtime-setup {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: var(--bg-root);
+  color: var(--text-primary);
+}
+
+.runtime-setup-card {
+  width: min(520px, 100%);
+  padding: 42px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 18px;
+  background: var(--bg-panel);
+  box-shadow: 0 24px 70px var(--shadow-soft);
+}
+
+.runtime-setup-card .brand {
+  margin-bottom: 64px;
+}
+
+.runtime-setup-card h1 {
+  margin: 10px 0 12px;
+  font-size: 38px;
+  letter-spacing: -.04em;
+}
+
+.runtime-setup-card p {
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.setup-detail {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.setup-progress {
+  margin-top: 22px;
+}
+
+.setup-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-panel-raised);
+}
+
+.setup-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width .2s ease;
+}
+
+.setup-progress-fill.indeterminate {
+  width: 30%;
+  animation: setup-progress-slide 1.2s ease-in-out infinite;
+}
+
+.setup-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font: 10px var(--font-mono);
+}
+
+.setup-detail span {
+  color: var(--text-muted);
+}
+
+.setup-detail strong {
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.setup-button {
+  width: 100%;
+  justify-content: center;
+  margin-top: 28px;
+}
+
+.setup-log {
+  margin-top: 10px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font: 10px var(--font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.setup-error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.setup-skip {
+  display: block;
+  margin: 16px auto 0;
+}
+
+.setup-hint {
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@keyframes setup-progress-slide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(340%); }
+}

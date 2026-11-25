@@ -1,0 +1,257 @@
+.trace-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.trace-context {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-body);
+  font: 10px var(--font-mono);
+}
+
+.trace-context em {
+  color: var(--accent);
+  font-style: normal;
+}
+
+.trace-toolbar > div:first-child {
+  display: grid;
+  gap: 7px;
+}
+
+.trace-toolbar strong {
+  color: var(--text-body);
+  font: 11px var(--font-mono);
+  font-weight: 400;
+}
+
+.trace-panel {
+  padding: 22px 20px 16px;
+}
+
+.trace-row {
+  display: grid;
+  grid-template-columns: 135px 1fr 82px;
+  align-items: center;
+  gap: 16px;
+  min-height: 50px;
+  border-top: 1px solid var(--border-faint);
+}
+
+.trace-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.trace-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 6px;
+  border-radius: 50%;
+  background: var(--backend-cpu);
+}
+
+.trace-dot.cuda {
+  background: var(--backend-cuda);
+}
+
+.trace-dot.transfer {
+  background: var(--status-warning);
+}
+
+.trace-label div {
+  display: grid;
+  gap: 5px;
+}
+
+.trace-label strong {
+  color: var(--text-body);
+  font: 10px var(--font-mono);
+}
+
+.trace-label span {
+  color: var(--text-muted);
+  font: 9px var(--font-mono);
+}
+
+.trace-lane {
+  position: relative;
+  height: 22px;
+  background: repeating-linear-gradient(90deg, var(--border-faint) 0, var(--border-faint) 1px, transparent 1px, transparent 25%);
+}
+
+.trace-bar {
+  height: 22px;
+  display: flex;
+  align-items: center;
+  min-width: 48px;
+  padding: 0 8px;
+  color: var(--backend-cuda-on);
+  font: 8px var(--font-mono);
+}
+
+.trace-bar.cuda {
+  background: var(--backend-cuda);
+}
+
+.trace-bar.cpu {
+  background: var(--backend-cpu);
+  color: var(--backend-cpu-on);
+}
+
+.trace-bar.transfer {
+  background: var(--status-warning);
+  color: var(--backend-transfer-on);
+}
+
+.trace-bar.queued {
+  opacity: .32;
+}
+
+.trace-bar.running {
+  box-shadow: 0 0 15px var(--accent-glow-soft);
+}
+
+.trace-value {
+  display: grid;
+  gap: 4px;
+  text-align: right;
+}
+
+.trace-value strong {
+  color: var(--text-body);
+  font: 10px var(--font-mono);
+  font-weight: 400;
+}
+
+.trace-value span {
+  color: var(--text-faint);
+  font: 9px var(--font-mono);
+}
+
+.trace-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 25px;
+  margin-top: 16px;
+  padding: 18px 20px;
+  border: 1px solid var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.trace-footer > div:first-child {
+  display: grid;
+  gap: 7px;
+}
+
+.trace-footer strong {
+  color: var(--accent);
+  font: 14px var(--font-mono);
+  font-weight: 400;
+}
+
+.trace-footer > div:first-child span:last-child {
+  color: var(--status-success-muted);
+  font: 10px var(--font-mono);
+}
+
+.selected-metrics {
+  display: flex;
+  gap: 28px;
+}
+
+.benchmark-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(350px, .8fr);
+  gap: 16px;
+}
+
+.benchmark-card {
+  padding: 24px;
+}
+
+.benchmark-history {
+  padding: 24px;
+}
+
+.benchmark-card h2 {
+  margin: 9px 0 8px;
+  color: var(--text-primary);
+  font-size: 20px;
+  letter-spacing: -.04em;
+}
+
+.benchmark-card p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.benchmark-metrics {
+  display: flex;
+  gap: 42px;
+  margin: 28px 0 23px;
+}
+
+.benchmark-card .secondary-button {
+  margin-top: 20px;
+}
+
+.benchmark-history .section-heading {
+  margin-bottom: 20px;
+}
+
+.benchmark-session {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.benchmark-session > div {
+  display: grid;
+  gap: 5px;
+  flex: 1;
+}
+
+.benchmark-session strong {
+  color: var(--text-primary);
+  font: 11px var(--font-mono);
+}
+
+.benchmark-session span {
+  color: var(--text-muted);
+  font: 9px var(--font-mono);
+}
+
+.benchmark-session b {
+  color: var(--text-body);
+  font: 10px var(--font-mono);
+  font-weight: 400;
+}
+
+.trace-dot.cpu {
+  background: var(--backend-cpu);
+}
+
+.trace-dot.network {
+  background: var(--status-warning);
+}
+
+.trace-bar.network {
+  background: var(--status-warning);
+  color: var(--backend-transfer-on);
+}
+
+@media (max-width: 900px) {
+  .benchmark-layout {
+    grid-template-columns: 1fr;
+  }
+}

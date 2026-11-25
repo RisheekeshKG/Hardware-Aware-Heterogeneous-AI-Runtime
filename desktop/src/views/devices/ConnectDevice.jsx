@@ -2,6 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { api } from '../../api/endpoints.js'
 import { useRuntime } from '../../app/RuntimeProvider.jsx'
 import { useToast } from '../../app/ToastProvider.jsx'
+import { Button } from '../../components/Button.jsx'
+import { Field } from '../../components/Field.jsx'
+import { Modal, ModalActions } from '../../components/Modal.jsx'
+import { ArrowRightIcon } from '../../components/icons.jsx'
 
 export function ConnectDevice({ onClose }) {
   const { refresh } = useRuntime()
@@ -43,18 +47,17 @@ export function ConnectDevice({ onClose }) {
     } catch (connectError) { setError(connectError.message) } finally { setWaiting(false) }
   }
 
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal connect-modal" onSubmit={submit}>
-    <div className="modal-header"><div><div className="eyebrow">ADD DEVICE</div><h2>Connect another computer</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
+  return <Modal eyebrow="ADD DEVICE" title="Connect another computer" onClose={onClose} onSubmit={submit} className="connect-modal">
     <p>HAR workers broadcast themselves on the LAN. Pick one from the scan below, or paste an address if you already know it.</p>
 
-    <div className="section-heading compact" style={{ marginTop: 18 }}><div><span className="eyebrow">HAR USERS ON YOUR NETWORK</span></div><button type="button" className="text-button" onClick={scan} disabled={scanning}>{scanning ? 'Scanning...' : 'Rescan'}</button></div>
-    {discovered.length ? <div className="discovered-list">{discovered.map((node) => <div className="discovered-row" key={node.node_id}><div><strong>{node.name || node.node_id}</strong><span>{node.base_url || node.address || node.node_id}</span></div><button type="button" className="secondary-button" onClick={() => connectDiscovered(node)} disabled={waiting}>Connect</button></div>)}</div> : <div className="empty-copy">{scannedOnce ? 'No HAR workers found on the LAN. Make sure the other computer is set to Worker.' : 'Scanning for HAR workers...'}</div>}
+    <div className="section-heading compact" style={{ marginTop: 18 }}><div><span className="eyebrow">HAR USERS ON YOUR NETWORK</span></div><Button variant="text" onClick={scan} disabled={scanning}>{scanning ? 'Scanning…' : 'Scan again'}</Button></div>
+    {discovered.length ? <div className="discovered-list">{discovered.map((node) => <div className="discovered-row" key={node.node_id}><div><strong>{node.name || node.node_id}</strong><span>{node.base_url || node.address || node.node_id}</span></div><Button onClick={() => connectDiscovered(node)} disabled={waiting}>Connect</Button></div>)}</div> : <div className="empty-copy">{scannedOnce ? 'No HAR workers found on the LAN. Make sure the other computer is set to Worker.' : 'Scanning for HAR workers...'}</div>}
 
     <div className="section-heading compact" style={{ marginTop: 22 }}><div><span className="eyebrow">OR CONNECT BY ADDRESS</span></div></div>
-    <label>Device address<input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="192.168.1.25:9000" disabled={waiting} /></label>
-    <label>Nickname <span className="optional">OPTIONAL</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></label>
+    <Field label="Device address"><input value={workerUrl} onChange={(event) => setWorkerUrl(event.target.value)} placeholder="192.168.1.25:9000" disabled={waiting} spellCheck={false} /></Field>
+    <Field label="Nickname" optional><input value={name} onChange={(event) => setName(event.target.value)} placeholder="Office computer" /></Field>
     <div className="advanced-note">{waiting ? 'Waiting for someone to click Accept on the other computer (up to 2 minutes)...' : 'Set the other computer to Worker on its Devices page. After you connect, click Accept there.'}</div>
     {error && <div className="form-error">{error}</div>}
-    <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={waiting || !workerUrl.trim()}>{waiting ? 'Waiting for approval...' : 'Connect by address'} <span>-&gt;</span></button></div>
-  </form></div>
+    <ModalActions><Button onClick={onClose}>Cancel</Button><Button type="submit" variant="primary" disabled={waiting || !workerUrl.trim()} iconAfter={<ArrowRightIcon />}>{waiting ? 'Waiting for approval…' : 'Connect by address'}</Button></ModalActions>
+  </Modal>
 }

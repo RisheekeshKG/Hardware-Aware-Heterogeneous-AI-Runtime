@@ -7,7 +7,7 @@ export function TrustedHostsPanel() {
   const action = useAction()
   if (!hosts || hosts.length === 0) return null
   const onRevoke = (ip) => action({
-    confirm: `Revoke trust for ${ip}? HAR will refuse future jobs from this host.`,
+    confirm: { title: `Revoke trust for ${ip}?`, message: 'HAR will refuse any future tasks from that host until you accept it again.', confirmLabel: 'Revoke' },
     run: () => api.revokeTrustedHost(ip),
     success: `${ip} is no longer trusted.`,
     failure: 'Could not revoke',

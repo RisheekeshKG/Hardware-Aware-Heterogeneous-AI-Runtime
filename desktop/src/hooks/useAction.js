@@ -1,4 +1,5 @@
 import { useCallback } from 'react'
+import { useConfirm } from '../app/ConfirmProvider.jsx'
 import { useRuntime } from '../app/RuntimeProvider.jsx'
 import { useToast } from '../app/ToastProvider.jsx'
 
@@ -7,8 +8,10 @@ import { useToast } from '../app/ToastProvider.jsx'
 export function useAction() {
   const notify = useToast()
   const { refresh } = useRuntime()
+  const ask = useConfirm()
+  // `confirm` is { title, message, confirmLabel, tone } for the ConfirmDialog.
   return useCallback(async ({ confirm, run, success, failure = 'That did not work' }) => {
-    if (confirm && !window.confirm(confirm)) return null
+    if (confirm && !(await ask(confirm))) return null
     try {
       const result = await run()
       if (success) notify(typeof success === 'function' ? success(result) : success)
@@ -18,5 +21,5 @@ export function useAction() {
       notify(`${failure}: ${error.message}`)
       return null
     }
-  }, [notify, refresh])
+  }, [ask, notify, refresh])
 }

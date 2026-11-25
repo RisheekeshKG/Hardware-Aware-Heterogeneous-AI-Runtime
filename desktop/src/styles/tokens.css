@@ -1,0 +1,115 @@
+/* Design tokens. The only file with colour literals; see docs/style.md. */
+:root {
+  /* Surfaces, darkest to lightest */
+  --bg-sidebar: #0a0c10;
+  --bg-sunken: #0a0d10;         /* code, script output */
+  --bg-root: #0b0d11;
+  --bg-input: #0b0f12;
+  --bg-panel: #11151a;
+  --bg-hover: #13181d;
+  --bg-panel-raised: #171c22;   /* active / selected only */
+  --bg-track: #263039;          /* progress and memory bar tracks */
+  --bg-glow: #1a292a;           /* soft light behind the top of the shell */
+  --bg-danger-row: #141115;
+  --bg-panel-glass: rgba(16, 21, 26, .86);
+  --bg-row: rgba(17, 21, 26, .58);
+  --bg-sunken-glass: rgba(10, 13, 16, .6);
+  --bg-sidebar-glass: rgba(8, 11, 14, .76);
+  --overlay: rgba(3, 5, 7, .76);
+
+  /* Borders */
+  --border-faint: #202830;
+  --border-subtle: #252c33;
+  --border-strong: #35414d;
+  --border-stronger: #44515c;
+
+  /* Text, brightest to dimmest */
+  --text-primary: #e8edf1;
+  --text-body: #c5d0d6;
+  --text-secondary: #9aa6b2;
+  --text-dim: #7d8a95;
+  --text-muted: #687582;
+  --text-faint: #56636e;
+  --text-disabled: #46515c;
+
+  /* Runtime accent: active navigation, primary actions, running, selection */
+  --accent: #d9ff72;
+  --accent-hover: #edffac;
+  --accent-on: #12170b;         /* text on an accent fill */
+  --accent-dark: #536f36;
+  --accent-bg: #1b2619;
+  --accent-bg-strong: #26371e;
+  --accent-border: #4e6039;
+  --accent-text: #d9e8d3;
+  --accent-text-muted: #82947f;
+  --accent-glow: rgba(217, 255, 114, .55);
+  --accent-glow-soft: rgba(217, 255, 114, .25);
+  --accent-wash: rgba(217, 255, 114, .05);
+
+  /* Backends: same colour on every badge, bar, trace and card.
+     CUDA is a softer green so it never reads as "running". */
+  --backend-cpu: #71c8ff;
+  --backend-cpu-bg: #172c39;
+  --backend-cpu-on: #0c1820;
+  --backend-mps: #c29cff;
+  --backend-mps-bg: #2a2039;
+  --backend-cuda: #9fe870;
+  --backend-cuda-bg: #1f3319;
+  --backend-cuda-on: #11200c;
+  --backend-transfer: #ffbd72;
+  --backend-transfer-bg: #372a1b;
+  --backend-transfer-on: #241607;
+
+  /* Statuses */
+  --status-running: var(--accent);
+  --status-running-bg: #27321b;
+  --status-success: #91e3a5;
+  --status-success-bg: #1b3022;
+  --status-success-border: #2d4935;
+  --status-success-text: #cce6d0;
+  --status-success-muted: #78907d;
+  --status-warning: #ffbd72;    /* queued */
+  --status-warning-bg: #362718;
+  --status-warning-border: #4b3c2c;
+  --status-warning-text: #e3c69c;
+  --status-warning-muted: #8a7a52;
+  --status-error: #ff9272;
+  --status-error-bg: #241715;
+  --status-error-border: #633c32;
+  --status-error-text: #f0bdac;
+  --status-error-muted: #c59b8d;
+  --status-stopped: #b7c0c8;    /* stopped by request: neutral, not an error */
+  --status-stopped-bg: #232a31;
+  --status-offline: #68737c;
+  --status-offline-bg: #20272d;
+  --warning-glow: rgba(255, 189, 114, .35);
+  --error-glow: rgba(255, 146, 114, .35);
+
+  /* Shadows */
+  --shadow-strong: rgba(0, 0, 0, .55);
+  --shadow-soft: rgba(0, 0, 0, .3);
+
+  /* Type */
+  --font-ui: 'Manrope', 'Inter', sans-serif;
+  --font-mono: 'DM Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Spacing: 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --radius-sm: 3px;
+  --radius-md: 6px;
+  --radius-lg: 18px;
+
+  /* Layers: dropdown menus open inside modals, toasts sit above both */
+  --z-modal: 50;
+  --z-dropdown: 60;
+  --z-toast: 70;
+
+  --focus-ring: 0 0 0 2px var(--bg-root), 0 0 0 4px var(--accent);
+}

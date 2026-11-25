@@ -1,3 +1,4 @@
+import { ConfirmProvider } from './app/ConfirmProvider.jsx'
 import { ModalHost } from './app/ModalHost.jsx'
 import { NavigationProvider, useNavigation } from './app/NavigationProvider.jsx'
 import { PairingPrompt } from './app/PairingPrompt.jsx'
@@ -25,9 +26,11 @@ export function App() {
   return <ToastProvider>
     <SetupGate>
       <RuntimeProvider>
-        <NavigationProvider>
-          <Shell />
-        </NavigationProvider>
+        <ConfirmProvider>
+          <NavigationProvider>
+            <Shell />
+          </NavigationProvider>
+        </ConfirmProvider>
       </RuntimeProvider>
     </SetupGate>
   </ToastProvider>

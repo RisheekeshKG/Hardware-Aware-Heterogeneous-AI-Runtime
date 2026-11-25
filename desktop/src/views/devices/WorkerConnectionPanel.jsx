@@ -8,7 +8,7 @@ export function WorkerConnectionPanel() {
   if (!connection) return null
   const host = connection.host_ip
   const onStopServing = () => action({
-    confirm: `Stop working for ${host || 'this host'}? HAR will stop auto-retrying every 5 seconds. You can accept a new host anytime.`,
+    confirm: { title: `Stop working for ${host || 'this host'}?`, message: 'HAR stops reconnecting to it every 5 seconds. You can accept a new host at any time.', confirmLabel: 'Stop working for it' },
     run: api.stopServingHost,
     success: `Stopped working for ${host || 'this host'}.`,
     failure: 'Could not stop',
