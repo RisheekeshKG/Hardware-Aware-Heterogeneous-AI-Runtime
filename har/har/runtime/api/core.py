@@ -22,6 +22,7 @@ from ..discovery import DiscoveryRegistry
 from ..graceful_shutdown import install as _install_graceful_shutdown, on_shutdown as _on_shutdown
 from ..idle_shutdown import install as _install_idle_watchdog
 from ..rate_limit import install as _install_rate_limiter
+from .schemas import ACTIVE_STATUSES
 
 if TYPE_CHECKING:
     from .schemas import RunRecord, ScriptRecord
@@ -73,6 +74,9 @@ _node_secrets: dict[str, str] = {}
 # Workers removed with Disconnect. Their registrations get 410 Gone, which tells
 # the worker to stop, until the user adds the device again.
 _disconnected_nodes: set[str] = set()
+# Names the user gave workers on this host. Workers re-register every few seconds with
+# their own name; without this, a rename lasted until the next registration.
+_node_aliases: dict[str, str] = {}
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="har-benchmark")
 _script_runs: dict[str, "ScriptRecord"] = {}
 
@@ -81,10 +85,10 @@ def _host_has_active_work() -> bool:
     """Any queued/running benchmark or script = the server is still useful. Block idle shutdown."""
 
     for run in _runs.values():
-        if run.status in {"queued", "running"}:
+        if run.status in ACTIVE_STATUSES:
             return True
     for script in _script_runs.values():
-        if script.status in {"queued", "running"}:
+        if script.status in ACTIVE_STATUSES:
             return True
     return False
 
@@ -102,12 +106,12 @@ def _mark_host_inflight_failed() -> None:
 
     now = datetime.now(timezone.utc).isoformat()
     for run in _runs.values():
-        if run.status in {"queued", "running"}:
+        if run.status in ACTIVE_STATUSES:
             run.status = "failed"
             run.error = "Server received a shutdown signal while this run was in flight"
             run.updated_at = now
     for script in _script_runs.values():
-        if script.status in {"queued", "running"}:
+        if script.status in ACTIVE_STATUSES:
             script.status = "failed"
             script.error = "Server received a shutdown signal while this script was in flight"
             script.updated_at = now

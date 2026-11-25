@@ -10,7 +10,11 @@ from typing import Any
 
 from ..benchmark import run_workload
 from .auth import _signed_headers_for
-from .schemas import RunRecord, ScriptRecord
+from .schemas import ACTIVE_STATUSES, RunRecord, ScriptRecord
+
+# After asking a worker to stop a script, how long we wait for it to report a final
+# status before giving up on it and marking the host's record stopped anyway.
+REMOTE_STOP_CONFIRM_SECONDS = 15.0
 
 
 def run_benchmark(record: RunRecord) -> None:
@@ -94,7 +98,7 @@ def run_remote_benchmark(record: RunRecord, node: dict[str, Any]) -> None:
                         "network_round_trip_ms": record.network_round_trip_ms,
                     }
                 )
-                if worker_record["status"] in {"completed", "failed"}:
+                if worker_record["status"] not in ACTIVE_STATUSES:
                     if worker_record["status"] == "completed":
                         record.result = worker_record["result"]
                         record.status = "completed"
@@ -125,9 +129,8 @@ def run_script_in_process(record: ScriptRecord) -> None:
     from ..subprocess_runner import DEFAULT_SCRIPT_TIMEOUT_SECONDS as _DEFAULT_SCRIPT_TIMEOUT_SECONDS
     from ..subprocess_runner import run_script_in_subprocess
 
-    record.status = "running"
-    record.started_at = datetime.now(timezone.utc).isoformat()
-    record.updated_at = record.started_at
+    if not record.begin_running():
+        return  # stopped while queued; request_stop already finalised the record
     try:
         with tempfile.TemporaryDirectory(prefix="har-job-") as directory:
             result = run_script_in_subprocess(
@@ -137,6 +140,7 @@ def run_script_in_process(record: ScriptRecord) -> None:
                 cwd=Path(directory),
                 timeout_seconds=record.request.timeout_seconds or _DEFAULT_SCRIPT_TIMEOUT_SECONDS,
                 on_chunk=record.append_chunk,
+                cancel_event=record.cancel_event,
             )
             # `record.output` was already populated incrementally by append_chunk. Fall back
             # to the aggregated buffer only if streaming produced nothing (very short scripts
@@ -149,7 +153,9 @@ def run_script_in_process(record: ScriptRecord) -> None:
             record.exit_code = result["exit_code"]
             record.timed_out = bool(result["timed_out"])
             record.remote_execute_seconds = result["execute_seconds"]
-            if result["timed_out"]:
+            if result.get("stopped"):
+                record.status = "stopped"
+            elif result["timed_out"]:
                 record.status = "failed"
                 record.error = f"Script exceeded {record.request.timeout_seconds:g}s"
             elif result["exit_code"] == 0:
@@ -170,9 +176,8 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
 
     import httpx
 
-    record.status = "running"
-    record.started_at = datetime.now(timezone.utc).isoformat()
-    record.updated_at = record.started_at
+    if not record.begin_running():
+        return  # stopped while queued; nothing was sent to the worker
     node_id = node.get("node_id", "")
     try:
         with httpx.Client(timeout=30.0) as client:
@@ -185,37 +190,50 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
             )
             response.raise_for_status()
             worker_run_id = response.json()["id"]
+            record.worker_run_id = worker_run_id
             node["active_job"] = record.id
             last_chunk_seq = -1
-            while True:
-                # Drain any new streamed chunks before polling status, so the UI sees
-                # output continuously flowing even on a long job. The cursor is stored
-                # on the host so a reconnect wouldn't double-stream anything.
+            stop_deadline: float | None = None
+
+            def drain_chunks() -> None:
+                # The cursor lives on the host, so re-reading never double-appends output.
+                nonlocal last_chunk_seq
                 chunks_url = f"{node['base_url']}/worker/scripts/{worker_run_id}/chunks?since={last_chunk_seq}"
                 try:
                     chunk_response = client.get(chunks_url, headers=_signed_headers_for(node_id, "GET", chunks_url))
                     chunk_response.raise_for_status()
-                    chunk_payload = chunk_response.json()
-                    for chunk in chunk_payload.get("chunks", []):
+                    for chunk in chunk_response.json().get("chunks", []):
                         record.append_chunk(chunk["stream"], chunk["text"])
                         last_chunk_seq = max(last_chunk_seq, chunk.get("seq", last_chunk_seq))
                 except Exception:
-                    # Older workers won't have /chunks. We'll fall back to the aggregated
-                    # `output` from the status poll below, same as before.
+                    # Older workers don't have /chunks; the status poll's aggregated
+                    # `output` below is the fallback.
                     pass
+
+            while True:
+                if record.cancel_event.is_set() and stop_deadline is None:
+                    stop_deadline = time.monotonic() + REMOTE_STOP_CONFIRM_SECONDS
+                    if not _ask_worker_to_stop(client, node, node_id, worker_run_id, record):
+                        return
+
+                drain_chunks()
 
                 poll_url = f"{node['base_url']}/worker/scripts/{worker_run_id}"
                 worker_response = client.get(poll_url, headers=_signed_headers_for(node_id, "GET", poll_url))
                 worker_response.raise_for_status()
                 worker_record = worker_response.json()
-                record.status = worker_record["status"]
                 # Only overwrite `output` from the status poll if streaming has produced nothing —
                 # otherwise the status poll's aggregated snapshot would stomp on our live chunks.
                 if not record.chunks:
                     record.output = worker_record.get("output", "")
                 record.error = worker_record.get("error")
                 record.exit_code = worker_record.get("exit_code")
-                if record.status in {"completed", "failed"}:
+                # The worker may report "queued" while its single slot is busy; the host
+                # keeps showing "running" until the worker reports a final status.
+                if worker_record["status"] not in ACTIVE_STATUSES:
+                    # Lines printed between the last drain and the exit would otherwise be lost.
+                    drain_chunks()
+                    record.status = worker_record["status"]
                     # Prefer the worker's monotonic execute_seconds — immune to clock skew between
                     # host and worker. Only fall back to subtracting ISO timestamps if the worker
                     # is older than 1.0.2 and didn't send it.
@@ -234,6 +252,13 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
                                 record.remote_execute_seconds = None
                     record.timed_out = bool(worker_record.get("timed_out", False))
                     break
+                if stop_deadline is not None and time.monotonic() > stop_deadline:
+                    record.status = "stopped"
+                    record.error = (
+                        f"Asked the other computer to stop this script, but it didn't confirm within "
+                        f"{REMOTE_STOP_CONFIRM_SECONDS:g} s. It may still be running there."
+                    )
+                    break
                 time.sleep(0.25)
     except Exception as error:
         record.status = "failed"
@@ -242,3 +267,28 @@ def run_remote_script(record: ScriptRecord, node: dict[str, Any]) -> None:
         record.finished_at = datetime.now(timezone.utc).isoformat()
         record.updated_at = record.finished_at
         node["active_job"] = None
+
+
+def _ask_worker_to_stop(client, node: dict[str, Any], node_id: str, worker_run_id: str, record: ScriptRecord) -> bool:
+    """Send the signed stop request. Returns False when the host should stop polling now.
+
+    A 404 or 405 here means the worker runs a HAR version without the stop endpoint
+    (a new worker answers 404 only for an unknown run, which we treat the same way:
+    there is nothing left to stop there).
+    """
+
+    stop_url = f"{node['base_url']}/worker/scripts/{worker_run_id}/stop"
+    try:
+        response = client.post(stop_url, content=b"", headers=_signed_headers_for(node_id, "POST", stop_url, b""))
+    except Exception as error:
+        record.append_chunk("stderr", f"[har] Could not reach the other computer to stop the script: {error}\n")
+        return True  # keep polling; the confirm deadline ends this if it never answers
+    if response.status_code in {404, 405}:
+        record.status = "stopped"
+        record.error = (
+            "The other computer's HAR version can't stop scripts. Update HAR there. "
+            "The script may still be running on that computer."
+        )
+        return False
+    # 409 = it finished on its own before the stop arrived; the next poll picks that up.
+    return True

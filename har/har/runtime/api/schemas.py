@@ -11,6 +11,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+# A run in one of these states can still change; anything else is final
+# ("completed", "failed", "stopped"). Every "is it finished?" check uses this set, so
+# adding a final status can't leave a stream or poll loop waiting forever.
+ACTIVE_STATUSES = frozenset({"queued", "running"})
+
+
 class MatmulRunRequest(BaseModel):
     workload: Literal["matmul", "image", "tree"] = "matmul"
     size: int = Field(default=1024, ge=1, le=16384)
@@ -142,8 +148,61 @@ class RunRecord:
         }
 
 
-class ScriptRecord:
+class StoppableRun:
+    """Stop handshake shared by the host's ScriptRecord and the worker's WorkerScriptRun.
+
+    The HTTP handler calls `request_stop()`; the job thread calls `begin_running()` before
+    it spawns anything and passes `cancel_event` to the subprocess runner. The lock makes
+    "stop a queued run" and "start that run" mutually exclusive, so a run stopped while
+    queued never starts.
+    """
+
+    status: str
+    started_at: str | None
+    finished_at: str | None
+
+    def _init_stop(self) -> None:
+        self._stop_lock = threading.Lock()
+        self.cancel_event = threading.Event()
+        self.stop_requested = False
+
+    def request_stop(self) -> str:
+        """Returns "stopped" (was queued, now final), "stopping" (running), or "finished"."""
+
+        with self._stop_lock:
+            if self.status not in ACTIVE_STATUSES:
+                return "finished"
+            self.stop_requested = True
+            self.cancel_event.set()
+            if self.status == "running":
+                return "stopping"
+            now = datetime.now(timezone.utc).isoformat()
+            self.status = "stopped"
+            self.finished_at = now
+            if hasattr(self, "updated_at"):
+                self.updated_at = now
+        self.append_chunk("stderr", "[har] Stopped before it started.\n")
+        return "stopped"
+
+    def begin_running(self) -> bool:
+        """Move queued → running. False means the run was stopped first; don't start it."""
+
+        with self._stop_lock:
+            if self.stop_requested or self.status != "queued":
+                return False
+            self.status = "running"
+            self.started_at = datetime.now(timezone.utc).isoformat()
+            if hasattr(self, "updated_at"):
+                self.updated_at = self.started_at
+            return True
+
+    def append_chunk(self, stream: str, text: str) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
+
+class ScriptRecord(StoppableRun):
     def __init__(self, request: ScriptRunRequest) -> None:
+        self._init_stop()
         self.id = uuid.uuid4().hex[:12]
         self.request = request
         self.status = "queued"
@@ -156,6 +215,7 @@ class ScriptRecord:
         self.finished_at: str | None = None  # when it returned (local) or the worker reported done
         self.remote_execute_seconds: float | None = None  # end-to-end on the worker, from its monotonic clock
         self.timed_out: bool = False
+        self.worker_run_id: str | None = None  # the worker's id for this run, once submitted
         # Streaming output: each chunk is {seq, stream, text, at}. The SSE endpoint replays
         # all existing chunks on connect and then pushes new ones as they arrive. `output`
         # remains the concatenated tail-100k view for clients that just want the final text.
@@ -177,8 +237,8 @@ class ScriptRecord:
         with self._chunks_lock:
             return [c for c in self.chunks if c["seq"] > since]
 
-    def snapshot(self) -> dict[str, Any]:
-        return {
+    def snapshot(self, include_output: bool = True) -> dict[str, Any]:
+        snapshot = {
             "id": self.id,
             "status": self.status,
             "filename": self.request.filename,
@@ -193,7 +253,12 @@ class ScriptRecord:
             "finished_at": self.finished_at,
             "remote_execute_seconds": self.remote_execute_seconds,
             "timed_out": self.timed_out,
+            "stop_requested": self.stop_requested,
+            "worker_run_id": self.worker_run_id,
         }
+        if not include_output:
+            del snapshot["output"]
+        return snapshot
 
 
 def validate_script_filename(filename: str) -> str:

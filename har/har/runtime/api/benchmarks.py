@@ -10,7 +10,7 @@ from fastapi import HTTPException, WebSocket, WebSocketDisconnect
 from ..devices import get_device_info
 from .core import LOOPBACK_CLIENTS, _executor, _nodes, _runs, app
 from .jobs import run_benchmark, run_remote_benchmark
-from .schemas import MatmulRunRequest, RunRecord
+from .schemas import ACTIVE_STATUSES, MatmulRunRequest, RunRecord
 
 
 @app.get("/api/runs")
@@ -75,13 +75,13 @@ async def run_events(websocket: WebSocket, run_id: str) -> None:
     try:
         while True:
             with record.condition:
-                if sent >= len(record.events) and record.status not in {"completed", "failed"}:
+                if sent >= len(record.events) and record.status in ACTIVE_STATUSES:
                     record.condition.wait(timeout=0.5)
                 events = record.events[sent:]
                 sent = len(record.events)
             for event in events:
                 await websocket.send_json(event)
-            if record.status in {"completed", "failed"} and sent >= len(record.events):
+            if record.status not in ACTIVE_STATUSES and sent >= len(record.events):
                 break
             await asyncio.sleep(0)
     except WebSocketDisconnect:

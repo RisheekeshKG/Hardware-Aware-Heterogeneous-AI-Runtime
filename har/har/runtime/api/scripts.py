@@ -1,4 +1,4 @@
-"""`/api/scripts*` endpoints: submit, status, cursor chunks, SSE stream."""
+"""`/api/scripts*` endpoints: submit, status, stop, cursor chunks, SSE stream."""
 
 from __future__ import annotations
 
@@ -10,12 +10,15 @@ from fastapi import HTTPException
 
 from .core import _executor, _nodes, _script_runs, app
 from .jobs import run_remote_script, run_script_in_process
-from .schemas import ScriptRecord, ScriptRunRequest, validate_script_filename
+from .schemas import ACTIVE_STATUSES, ScriptRecord, ScriptRunRequest, validate_script_filename
 
 
 @app.get("/api/scripts")
-def scripts() -> list[dict[str, Any]]:
-    return [record.snapshot() for record in reversed(list(_script_runs.values()))]
+def scripts(include_output: bool = True) -> list[dict[str, Any]]:
+    """Every run, newest first. The UI's list poll passes `include_output=false`: each run
+    can carry up to 100 KB of output, and the list doesn't show it."""
+
+    return [record.snapshot(include_output=include_output) for record in reversed(list(_script_runs.values()))]
 
 
 @app.get("/api/scripts/{script_id}")
@@ -23,6 +26,24 @@ def script_status(script_id: str) -> dict[str, Any]:
     record = _script_runs.get(script_id)
     if not record:
         raise HTTPException(status_code=404, detail="Script run not found")
+    return record.snapshot()
+
+
+@app.post("/api/scripts/{script_id}/stop", status_code=202)
+def stop_script(script_id: str) -> dict[str, Any]:
+    """Stop a queued or running script. Safe to call twice.
+
+    A queued run is final at once. A running one gets `stop_requested: true` and moves to
+    `stopped` within a few seconds (SIGINT, then SIGKILL after 2 s; remote runs also wait
+    for the worker to confirm). 409 if it already finished on its own.
+    """
+
+    record = _script_runs.get(script_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Script run not found")
+    outcome = record.request_stop()
+    if outcome == "finished" and record.status != "stopped":
+        raise HTTPException(status_code=409, detail=f"This script already {record.status}")
     return record.snapshot()
 
 
@@ -46,12 +67,13 @@ def script_chunks(script_id: str, since: int = -1) -> dict[str, Any]:
 
 
 @app.get("/api/scripts/{script_id}/stream")
-async def script_stream(script_id: str):
+async def script_stream(script_id: str, since: int = -1):
     """Server-Sent Events: pushes each new output chunk as it lands, then a terminal 'done'.
 
     The user-facing win: a 2-minute training script no longer sits as a blank panel. Output
     scrolls as it's produced, and the final `done` event carries exit_code + status so the
-    client can stop listening cleanly without a separate HTTP call.
+    client can stop listening cleanly without a separate HTTP call. `?since=N` skips chunks
+    the client already has, so a reconnect doesn't replay the whole output.
     """
 
     import json as _json
@@ -63,13 +85,13 @@ async def script_stream(script_id: str):
         raise HTTPException(status_code=404, detail="Script run not found")
 
     async def generate():
-        last_seq = -1
+        last_seq = since
         while True:
             chunks = record.chunks_since(last_seq)
             for chunk in chunks:
                 yield f"data: {_json.dumps(chunk)}\n\n"
                 last_seq = chunk["seq"]
-            if record.status in {"completed", "failed"}:
+            if record.status not in ACTIVE_STATUSES:
                 # Give the pipe reader threads a last chance to flush before saying done.
                 final = record.chunks_since(last_seq)
                 for chunk in final:

@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from .core import (
     _disconnected_nodes,
     _discovery_registry,
+    _node_aliases,
     _node_secrets,
     _nodes,
     _runs,
@@ -20,7 +21,7 @@ from .core import (
     app,
 )
 from .auth import CONNECT_APPROVAL_TIMEOUT_SECONDS, _normalize_worker_url
-from .schemas import DiscoveryConnectRequest, NodeConnectRequest, NodeHeartbeat, NodeRegistration, NodeRenameRequest
+from .schemas import ACTIVE_STATUSES, DiscoveryConnectRequest, NodeConnectRequest, NodeHeartbeat, NodeRegistration, NodeRenameRequest
 
 
 @app.post("/api/nodes/register")
@@ -32,7 +33,7 @@ def register_node(registration: NodeRegistration) -> dict[str, Any]:
     node.update(
         {
             "node_id": registration.node_id,
-            "name": registration.name,
+            "name": _node_aliases.get(registration.node_id, registration.name),
             "base_url": registration.base_url.rstrip("/"),
             "capabilities": registration.capabilities,
             "host": registration.host,
@@ -89,14 +90,14 @@ def disconnect_node(node_id: str) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     aborted_runs: list[str] = []
     for run in _runs.values():
-        if run.node_id == node_id and run.status in {"queued", "running"}:
+        if run.node_id == node_id and run.status in ACTIVE_STATUSES:
             run.status = "failed"
             run.error = "Remote device was disconnected while this run was in flight"
             run.updated_at = now
             aborted_runs.append(run.id)
     aborted_scripts: list[str] = []
     for script in _script_runs.values():
-        if script.request.target_node == node_id and script.status in {"queued", "running"}:
+        if script.request.target_node == node_id and script.status in ACTIVE_STATUSES:
             script.status = "failed"
             script.error = "Remote device was disconnected while this script was running"
             script.updated_at = now
@@ -215,4 +216,5 @@ def rename_node(node_id: str, request: NodeRenameRequest) -> dict[str, Any]:
     if not name:
         raise HTTPException(status_code=422, detail="Name cannot be blank")
     node["name"] = name
+    _node_aliases[node_id] = name
     return node

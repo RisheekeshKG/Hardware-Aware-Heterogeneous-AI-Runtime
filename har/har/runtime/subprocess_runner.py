@@ -68,6 +68,7 @@ def run_script_in_subprocess(
     timeout_seconds: float = DEFAULT_SCRIPT_TIMEOUT_SECONDS,
     extra_env: dict[str, str] | None = None,
     on_chunk: Callable[[str, str], None] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     """Run `content` as `cwd/filename` in a fresh Python subprocess.
 
@@ -76,10 +77,25 @@ def run_script_in_subprocess(
     user staring at a blank panel for two minutes while a training script produces output
     that only gets flushed at exit.
 
-    Returns `{stdout, stderr, exit_code, timed_out, execute_seconds}` where `execute_seconds`
-    is measured with `time.monotonic()`. On timeout the process group is killed and
-    `timed_out=True`.
+    If `cancel_event` is set while the script runs, the whole process group gets SIGINT
+    (so Python scripts can run their `finally` blocks), then SIGKILL two seconds later,
+    and the result has `stopped=True`. If it's already set before we start, nothing is
+    spawned.
+
+    Returns `{stdout, stderr, exit_code, timed_out, stopped, execute_seconds}` where
+    `execute_seconds` is measured with `time.monotonic()`. On timeout the process group
+    is killed and `timed_out=True`.
     """
+
+    if cancel_event is not None and cancel_event.is_set():
+        return {
+            "stdout": "",
+            "stderr": "",
+            "exit_code": None,
+            "timed_out": False,
+            "stopped": True,
+            "execute_seconds": 0.0,
+        }
 
     script_path = cwd / filename
     script_path.write_text(content, encoding="utf-8")
@@ -121,9 +137,13 @@ def run_script_in_subprocess(
             "stderr": f"Could not start subprocess: {error}",
             "exit_code": None,
             "timed_out": False,
+            "stopped": False,
             "execute_seconds": 0.0,
         }
     _track_process(proc.pid)
+    # start_new_session made the child a group leader, so its pgid is its pid. Saving it
+    # now means a stop request after the leader exits still reaches leftover grandchildren.
+    pgid = proc.pid if os.name != "nt" else None
 
     # One background reader per pipe, so a slow stderr can't backpressure stdout
     # and vice versa. Each reader appends to its own buffer AND fires on_chunk.
@@ -154,15 +174,27 @@ def run_script_in_subprocess(
         t.start()
 
     timed_out = False
-    try:
-        proc.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_process_tree(proc.pid)
+    stopped = False
+    deadline = start + timeout_seconds if timeout_seconds > 0 else None
+    # Poll instead of one long wait() so a stop request is noticed within ~0.1 s.
+    while True:
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=0.1)
+            break
         except subprocess.TimeoutExpired:
             pass
+        if cancel_event is not None and cancel_event.is_set():
+            stopped = True
+            _stop_process_group(proc, pgid)
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            timed_out = True
+            _kill_process_tree(proc.pid)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            break
 
     for t in threads:
         t.join(timeout=3)
@@ -171,14 +203,18 @@ def run_script_in_subprocess(
 
     stdout = "".join(stdout_buf)[-_OUTPUT_TAIL_BYTES:]
     stderr = "".join(stderr_buf)[-_OUTPUT_TAIL_BYTES:]
+    note = None
     if timed_out:
+        note = f"[har] Script exceeded {timeout_seconds:g}s and was terminated.\n"
+    elif stopped:
+        note = "[har] Stopped by request.\n"
+    if note:
         if stderr and not stderr.endswith("\n"):
             stderr += "\n"
-        timeout_note = f"[har] Script exceeded {timeout_seconds:g}s and was terminated.\n"
-        stderr += timeout_note
+        stderr += note
         if on_chunk is not None:
             try:
-                on_chunk("stderr", timeout_note)
+                on_chunk("stderr", note)
             except Exception:
                 pass
 
@@ -187,8 +223,44 @@ def run_script_in_subprocess(
         "stderr": stderr,
         "exit_code": proc.returncode,
         "timed_out": timed_out,
+        "stopped": stopped,
         "execute_seconds": elapsed,
     }
+
+
+def _stop_process_group(proc: subprocess.Popen, pgid: int | None) -> None:
+    """Ask the script's whole process tree to stop, then make sure it did.
+
+    POSIX: SIGINT to the group first, so a Python script gets KeyboardInterrupt and can
+    clean up, then SIGKILL to the group after 2 s. The SIGKILL goes out even if the
+    leader already exited, to catch grandchildren that ignored SIGINT.
+    Windows has no group SIGINT for a windowless child, so we kill the tree directly.
+    """
+
+    if os.name == "nt" or pgid is None:
+        _kill_process_tree(proc.pid)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        return
+
+    try:
+        os.killpg(pgid, signal.SIGINT)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
 
 
 def _kill_process_tree(pid: int) -> None:

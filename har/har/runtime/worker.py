@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .api import MatmulRunRequest, ScriptRunRequest
+from .api.schemas import ACTIVE_STATUSES, StoppableRun
 from .benchmark import run_workload
 from .devices import discover_devices, get_device_info, system_info
 from .discovery import DiscoveryBeacon
@@ -55,8 +56,9 @@ class WorkerRun:
         }
 
 
-class WorkerScriptRun:
+class WorkerScriptRun(StoppableRun):
     def __init__(self, request: ScriptRunRequest) -> None:
+        self._init_stop()
         self.id = uuid.uuid4().hex[:12]
         self.request = request
         self.status = "queued"
@@ -97,6 +99,7 @@ class WorkerScriptRun:
             "finished_at": self.finished_at,
             "execute_seconds": self.execute_seconds,
             "timed_out": self.timed_out,
+            "stop_requested": self.stop_requested,
         }
 
 
@@ -116,10 +119,10 @@ def _worker_has_active_work() -> bool:
     """Any queued/running job here means the host still needs us. Block idle shutdown."""
 
     for run in _worker_runs.values():
-        if run.status in {"queued", "running"}:
+        if run.status in ACTIVE_STATUSES:
             return True
     for script in _worker_script_runs.values():
-        if script.status in {"queued", "running"}:
+        if script.status in ACTIVE_STATUSES:
             return True
     return False
 
@@ -137,11 +140,11 @@ def _mark_worker_inflight_failed() -> None:
 
     now = datetime.now(timezone.utc).isoformat()
     for run in _worker_runs.values():
-        if run.status in {"queued", "running"}:
+        if run.status in ACTIVE_STATUSES:
             run.status = "failed"
             run.error = "Worker received a shutdown signal while this run was in flight"
     for script in _worker_script_runs.values():
-        if script.status in {"queued", "running"}:
+        if script.status in ACTIVE_STATUSES:
             script.status = "failed"
             script.error = "Worker received a shutdown signal while this script was in flight"
             if script.finished_at is None:
@@ -322,8 +325,8 @@ def _execute_script(record: WorkerScriptRun) -> None:
 
     from .subprocess_runner import DEFAULT_SCRIPT_TIMEOUT_SECONDS, run_script_in_subprocess
 
-    record.status = "running"
-    record.started_at = datetime.now(timezone.utc).isoformat()
+    if not record.begin_running():
+        return  # stopped while queued
     try:
         with tempfile.TemporaryDirectory(prefix="har-worker-job-") as directory:
             result = run_script_in_subprocess(
@@ -333,6 +336,7 @@ def _execute_script(record: WorkerScriptRun) -> None:
                 cwd=Path(directory),
                 timeout_seconds=record.request.timeout_seconds or DEFAULT_SCRIPT_TIMEOUT_SECONDS,
                 on_chunk=record.append_chunk,
+                cancel_event=record.cancel_event,
             )
             # `output` is populated incrementally by append_chunk; the aggregated
             # buffer below is only the fallback for scripts that printed nothing
@@ -345,7 +349,9 @@ def _execute_script(record: WorkerScriptRun) -> None:
             record.exit_code = result["exit_code"]
             record.execute_seconds = result["execute_seconds"]
             record.timed_out = bool(result["timed_out"])
-            if result["timed_out"]:
+            if result.get("stopped"):
+                record.status = "stopped"
+            elif result["timed_out"]:
                 record.status = "failed"
                 record.error = f"Script exceeded {record.request.timeout_seconds:g}s"
             elif result["exit_code"] == 0:
@@ -534,6 +540,20 @@ async def worker_script_status(run_id: str, http_request: Request) -> dict[str, 
     return record.to_dict()
 
 
+@worker_app.post("/worker/scripts/{run_id}/stop", status_code=202)
+async def stop_worker_script(run_id: str, http_request: Request) -> dict[str, Any]:
+    """The host forwards a user's Stop here. Same rules as the host's /api/scripts/{id}/stop."""
+
+    await _require_trusted(http_request)
+    record = _worker_script_runs.get(run_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Worker script run not found")
+    outcome = record.request_stop()
+    if outcome == "finished" and record.status != "stopped":
+        raise HTTPException(status_code=409, detail=f"This script already {record.status}")
+    return record.to_dict()
+
+
 @worker_app.get("/worker/scripts/{run_id}/chunks")
 async def worker_script_chunks(run_id: str, http_request: Request, since: int = -1) -> dict[str, Any]:
     """Cursor-based streaming read. Host calls this repeatedly with the latest `seq` it has."""
@@ -592,7 +612,7 @@ def connection_status(http_request: Request) -> dict[str, Any]:
         status = "connected"
     else:
         status = "unreachable"
-    running = sum(1 for record in [*_worker_runs.values(), *_worker_script_runs.values()] if record.status in {"queued", "running"})
+    running = sum(1 for record in [*_worker_runs.values(), *_worker_script_runs.values()] if record.status in ACTIVE_STATUSES)
     return {
         "status": status,
         "coordinator": coordinator,
