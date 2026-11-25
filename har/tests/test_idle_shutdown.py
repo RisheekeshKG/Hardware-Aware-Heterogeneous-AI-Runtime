@@ -12,7 +12,8 @@ def test_watchdog_disabled_when_timeout_is_zero():
 
 def test_touch_resets_idle_clock():
     watchdog = IdleWatchdog(timeout_seconds=3600)
-    time.sleep(0.05)
+    time.sleep(0.1)
+    # Windows' clock ticks every ~16 ms, so sleep well past the threshold.
     assert watchdog.idle_for() >= 0.05
     watchdog.touch()
     assert watchdog.idle_for() < 0.01

@@ -16,11 +16,24 @@ from .models import DeviceInfo, MemoryMeasurement
 BACKENDS = ("cpu", "mps", "cuda")
 
 
+def _cpu_freq():
+    """CPU frequency, or None where this psutil build has no cpu_freq (the GitHub macOS
+    runners' wheel) or the OS won't report it."""
+
+    reader = getattr(psutil, "cpu_freq", None)
+    if reader is None:
+        return None
+    try:
+        return reader()
+    except (OSError, NotImplementedError, RuntimeError):
+        return None
+
+
 def system_info() -> dict[str, object]:
     """Collect host inventory from the current machine without estimating hardware."""
 
     memory = psutil.virtual_memory()
-    frequency = psutil.cpu_freq()
+    frequency = _cpu_freq()
     return {
         "hostname": platform.node(),
         "os": {
@@ -129,7 +142,7 @@ def _cpu_brand() -> str:
 
 
 def _cpu_info() -> DeviceInfo:
-    frequency = psutil.cpu_freq()
+    frequency = _cpu_freq()
     frequency_mhz = frequency.max or frequency.current if frequency else None
     frequency_ghz = round(frequency_mhz / 1000, 2) if frequency_mhz else None
     brand = _cpu_brand()

@@ -1,38 +1,27 @@
-name: Release desktop installers
+name: release
 
+# Push a tag like v1.2.0 to build both installers and publish a GitHub release.
+# A manual run builds the installers as artifacts without publishing.
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  test:
-    name: Python tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: python -m pip install -e "./har[test]"
-      - working-directory: har
-        run: python -m pytest -q
+  ci:
+    uses: ./.github/workflows/ci.yml
 
-  # Each installer carries the ~40 MB runtime (no PyTorch). Nothing else is published:
-  # the app no longer downloads a runtime from GitHub Releases.
   build:
-    name: Build ${{ matrix.os }}
+    name: Installer · ${{ matrix.os }}
+    needs: ci
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [macos-14, windows-latest]
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,31 +29,33 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: desktop/package-lock.json
-      # Must match the Python minor version the app installs PyTorch for on first launch.
+      # Must match the Python version the app installs PyTorch for on first launch.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: python -m pip install -e "./har[desktop]"
-      - if: runner.os != 'Windows'
-        run: ./scripts/build-sidecar.sh
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: ./scripts/build-sidecar.ps1
-      - run: npm ci --prefix desktop
+      - run: npm ci
+        working-directory: desktop
+
+      # The runtime bundle (~40 MB, no PyTorch) plus the uv binary go inside the installer.
+      - if: runner.os == 'macOS'
+        run: |
+          ./scripts/build-sidecar.sh
+          npm run desktop:build --prefix desktop
       - if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $version = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          choco install innosetup --yes --no-progress
+          ./scripts/build-sidecar.ps1
           npm run desktop:build --prefix desktop -- --no-bundle
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          choco install innosetup --yes --no-progress
+          $version = (Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" scripts/windows-installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - if: runner.os != 'Windows'
-        run: npm run desktop:build --prefix desktop
+
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.os }}
+          name: installer-${{ matrix.os }}
           if-no-files-found: error
           path: |
             desktop/src-tauri/target/release/bundle/**/*.dmg
@@ -72,18 +63,15 @@ jobs:
 
   publish:
     name: Publish release
-    needs: [test, build]
-    # A manual run from a branch only builds; releases come from version tags.
+    needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
-          path: release-assets
-      - run: find release-assets -type f -exec ls -lh {} +
+          path: installers
       - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: release-assets/**/*
+          files: installers/**/*

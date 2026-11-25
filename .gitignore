@@ -1,27 +1,25 @@
+# Python
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 *.egg-info/
-build/
-dist/
-# PyInstaller spec files are tracked explicitly (har/har-runtime-server.spec);
-# this blanket ignore is here to catch any ad-hoc specs generated locally.
+
+# PyInstaller (only the runtime's spec is tracked)
 *.spec
 !har/har-runtime-server.spec
-
-# Tauri shell build artefacts — never tracked.
-desktop/src-tauri/target/
-desktop/src-tauri/runtime/har-runtime-server/
-desktop/src-tauri/runtime/uv/
-desktop/dist/
-
-# Frontend build artefacts and installed deps.
-desktop/node_modules/
-
-# macOS Finder metadata.
-.DS_Store
-
-# PyInstaller output for the backend runtime.
 har/build/
 har/dist/
+
+# Desktop app build output: frontend, Rust, Tauri-generated schemas, and the runtime + uv
+# that scripts/build-sidecar.* put next to the Rust shell.
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/runtime/
+
+# Benchmark exports (har benchmark --output ...)
+results/
+
+.DS_Store

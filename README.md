@@ -49,9 +49,8 @@ and uses it.
 
 | Platform | File | Notes |
 |---|---|---|
-| macOS (Apple Silicon) | `HAR Runtime_1.0.0_aarch64.dmg` | Not notarised yet — right-click → Open on first launch |
-| Windows (x64) | `HAR_Setup_1.0.0.exe` | SmartScreen will warn until code signing is in place |
-| Linux (x64) | Build locally via `npm run desktop:build` | Not yet released |
+| macOS (Apple Silicon) | `HAR Runtime_<version>_aarch64.dmg` | Not notarised yet — right-click → Open on first launch |
+| Windows (x64) | `HAR Runtime_<version>_x64-setup.exe` | SmartScreen will warn until code signing is in place |
 
 ---
 
@@ -299,30 +298,32 @@ to feedback on which other packages should land in the key set.
 python -m venv .venv
 source .venv/bin/activate              # or .venv\Scripts\activate on Windows
 pip install -e "har/[test]"             # SDK + services + test deps
-cd har && pytest                        # 55 tests, ~3s
+cd har && pytest                        # ~100 tests, ~10 s
 ```
 
 ### Desktop app from source
 
 ```bash
+./scripts/build-sidecar.sh              # PyInstaller runtime + bundled uv (Windows: build-sidecar.ps1)
 cd desktop
 npm ci
-npm run desktop:dev                     # live-reload (spawns backend + Rust shell + Vite)
-npm run desktop:build                   # produce installer in src-tauri/target/release/bundle/
+npm run desktop:dev                     # live-reload app
+npm run desktop:build                   # app/installer in src-tauri/target/release/bundle/
 ```
+
+`npm run lint` must pass; it catches a component used without an import.
 
 ### CI
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every PR + push
-to `main`:
+[`ci.yml`](.github/workflows/ci.yml) runs on every push to `main` and every PR, on macOS
+and Windows (the two platforms HAR ships for):
 
-- `pytest` matrix: ubuntu / macos / windows × py3.11 / py3.12
-- `vite build` on linux
-- `cargo check --no-default-features` on all three OSes
+- **Python tests**: `pytest` on Python 3.12, the version the app bundles.
+- **Desktop app**: ESLint, the Vite build, and `cargo check` of the Rust shell (which has
+  macOS- and Windows-only code paths).
 
-Specifically catches cross-platform drift in `subprocess_runner` (POSIX `killpg`
-vs Windows `taskkill`) and `env_hash` (importlib.metadata behavior differs in
-frozen PyInstaller bundles).
+[`release.yml`](.github/workflows/release.yml) runs on a `v*` tag: it runs CI, builds the
+macOS `.dmg` and the Windows installer, and publishes them as a GitHub release.
 
 ---
 
@@ -337,7 +338,10 @@ frozen PyInstaller bundles).
 - Human-approved pairing, trusted-host revoke, HMAC-signed requests
 - Subprocess isolation, SIGKILL-tree on timeout, monotonic durations
 - Idempotency keys on script submission
-- Desktop app: scripts-first UI, device inventory, routing decisions, timing breakdown
+- Live script output (SSE, resumes after a dropped connection) and Stop for running scripts
+- Desktop app: an IDE-style Scripts page (files in `~/HAR/scripts`, tabs, autosave, ⌘↵ run,
+  output console), per-computer device pages, Settings, first-launch PyTorch install with
+  parallel, resumable downloads
 
 ### Deliberately not yet
 
@@ -345,7 +349,6 @@ frozen PyInstaller bundles).
 |---|---|
 | Durable job queue | Scheduled; schema change is isolated to its own PR |
 | Code-signed installers | Needs paid Apple Developer ID + Windows EV cert |
-| SSE/WebSocket stdout streaming | Current polling is fine for scripts under ~5 min; longer-running work gets this next |
 | mDNS discovery | UDP broadcast doesn't cross subnets; mDNS does, planned |
 | Multi-host coordination | HAR assumes one host, many workers; multi-host election is out of scope for 1.x |
 
@@ -366,6 +369,7 @@ frozen PyInstaller bundles).
 | `HAR_RATE_LIMIT_WINDOW_SECONDS` | `60` | Sliding window the rate limiter counts across. |
 | `HAR_CORS_ORIGINS` | Tauri + localhost | Comma-separated allowed origins for the host API. Defaults to the Vite dev server and the Tauri webview. |
 | `HAR_CALIBRATION_DB` | `~/.har/calibration.db` | SQLite file holding per-shape latency measurements and per-backend measured bandwidths. Blow it away to reset the router's memory. |
+| `HAR_WORKSPACE_DIR` | `~/HAR/scripts` | Folder of `.py` files the desktop app's Scripts page edits. |
 | `HAR_HOME` | `~/.har` | Overrides the base directory for HAR's state files (calibration DB, per-worker trusted hosts, etc.). |
 
 On SIGTERM (triggered either by the idle watchdog, the OS, or a `kill` from a terminal) the
@@ -392,42 +396,33 @@ subprocess trees, and lets uvicorn drain in-flight HTTP connections normally. No
 ## Project layout
 
 ```
-HAR-Runtime/
-├── har/                              # pip install har — the whole Python package
-│   ├── pyproject.toml                #   name = "har"
-│   ├── har-runtime-server.spec       # PyInstaller spec for the desktop bundle
-│   ├── har/
-│   │   ├── __init__.py               # public SDK: offload, devices, map, where_did_it_run
-│   │   ├── decorator.py              # @offload wrapper + decision log
-│   │   ├── router.py                 # cost model + hysteresis + per-shape key
-│   │   ├── calibration.py            # SQLite cache for measured latencies
-│   │   ├── execute.py                # moves tensors, runs, pulls result back
-│   │   ├── inventory.py              # discovers CPU/MPS/CUDA via torch
-│   │   └── runtime/                  # the host + worker services, as a subpackage
-│   │       ├── __init__.py
-│   │       ├── api.py                # Host API (FastAPI, :8000)
-│   │       ├── worker.py             # Worker service (FastAPI, :9000)
-│   │       ├── cli.py                # `har` command (typer)
-│   │       ├── subprocess_runner.py  # OS-isolated script run + kill-tree
-│   │       ├── signing.py            # HMAC request signing
-│   │       ├── env_hash.py           # Env parity fingerprint
-│   │       ├── discovery.py          # UDP broadcast beacon + listener
-│   │       ├── devices.py            # CPU/MPS/CUDA probe
-│   │       ├── benchmark.py          # Built-in dev-tool benchmarks
-│   │       └── models.py             # Shared dataclasses
-│   └── tests/                        # 55 tests
-│
-├── desktop/                          # the Tauri desktop app (Rust shell + React UI)
-│   ├── src-tauri/                    # Rust Tauri shell
-│   ├── src/                          # React UI
-│   ├── index.html
-│   ├── package.json
-│   └── vite.config.js
-│
-├── scripts/                          # offload_demo.py, resource_probe.py
-├── docs/style.md                     # UI style guide
-├── .github/workflows/ci.yml          # Cross-platform CI matrix
-└── README.md
+har/                                  # pip install har — the whole Python package
+├── pyproject.toml
+├── har-runtime-server.spec           # PyInstaller spec for the desktop app's runtime
+├── har/
+│   ├── __init__.py                   # public SDK: offload, devices, map, where_did_it_run
+│   ├── decorator.py, router.py       # @offload + cost model with hysteresis
+│   ├── calibration.py                # SQLite cache of measured latencies
+│   ├── execute.py, inventory.py      # move tensors and run; discover CPU/MPS/CUDA
+│   └── runtime/                      # host + worker services
+│       ├── api/                      # host API (FastAPI, :8000), one module per area
+│       ├── worker.py                 # worker service (FastAPI, :9000)
+│       ├── cli.py                    # the `har` command
+│       ├── subprocess_runner.py      # isolated script runs, stop, kill-tree
+│       ├── torch_install.py          # first-launch PyTorch install (parallel, resumable)
+│       └── …                         # signing, discovery, devices, benchmarks, shutdown
+└── tests/
+
+desktop/                              # the desktop app (Tauri: Rust shell + React UI)
+├── src-tauri/                        # Rust shell: starts the runtime, installs PyTorch
+└── src/                              # React UI — see docs/current-ui.md
+    ├── App.jsx, state.jsx, api.js, helpers.js, ui.jsx
+    ├── pages/                        # Overview, Scripts, Devices, Settings, Benchmarks, Setup
+    └── styles/                       # theme.css (colours) + app.css
+
+scripts/                              # build-sidecar.sh/.ps1, windows-installer.iss, offload_demo.py
+docs/                                 # current-ui.md, style.md
+.github/workflows/                    # ci.yml, release.yml
 ```
 
 ---
