@@ -340,3 +340,17 @@
 .api-error.restarting strong {
   color: var(--status-warning-text);
 }
+
+/* The sidebar stays put while long pages scroll. */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.detail-note code {
+  color: var(--text-secondary);
+}

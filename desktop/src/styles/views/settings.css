@@ -73,3 +73,20 @@
   font: 12px var(--font-mono);
   overflow-wrap: anywhere;
 }
+
+.settings-panel .setup-progress {
+  max-width: 520px;
+}
+
+.link-button {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: none;
+  font: inherit;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
