@@ -45,6 +45,7 @@
   --accent-glow: rgba(217, 255, 114, .55);
   --accent-glow-soft: rgba(217, 255, 114, .25);
   --accent-wash: rgba(217, 255, 114, .05);
+  --editor-selection: rgba(217, 255, 114, .16);
 
   /* Backends: same colour on every badge, bar, trace and card.
      CUDA is a softer green so it never reads as "running". */

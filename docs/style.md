@@ -17,6 +17,10 @@ Avoid presenting HAR as a generic SaaS dashboard, an AI chatbot, or a benchmark-
 
 ## Color Tokens
 
+`desktop/src/styles/tokens.css` is the source of truth and the only file with colour
+literals. The values below are the core of it; it also defines tinted backgrounds, borders
+and text for each status and backend, spacing, radius, z-index and the focus ring.
+
 ### Core
 
 ```css
@@ -53,6 +57,7 @@ Use lime for active navigation, primary actions, healthy runtime indicators, and
 ```
 
 Backend colors must remain consistent across badges, traces, timelines, charts, and device cards.
+CUDA's green is deliberately softer than the lime accent so a CUDA badge never reads as "running".
 
 ### Status Colors
 
@@ -106,9 +111,11 @@ Labels:           9-10px
 
 ### Responsive
 
-- At 900px, collapse the sidebar to an icon rail.
-- At 700px, stack control and detail panels.
-- At 620px, use one-column cards and hide table headers.
+The desktop window can't be narrower than 980 × 680, so there are no phone breakpoints.
+
+- Below 1280px, Scripts stacks the run list above the selected run.
+- Below 1100px, two-column panels (Overview, device detail) stack and the stat row wraps to two columns.
+- Below 900px, the benchmark layout stacks.
 - Never let telemetry overflow horizontally.
 
 ## Spacing
@@ -136,12 +143,14 @@ Use a compact 4px base system:
 
 ## Navigation
 
-Primary navigation:
+Primary navigation (Workspace):
 
-1. Runtime
-2. Workloads
-3. Compute Fabric
-4. Traces
+1. Overview
+2. Scripts
+3. Devices (Device detail sits under it in the breadcrumb)
+4. Settings
+
+Dev tools: Benchmarks.
 
 Active navigation uses:
 
@@ -173,6 +182,8 @@ Inactive navigation uses muted text and no decorative emphasis.
 - Dark red background or red border.
 - Error text color.
 - Use only for stopping or removing workloads.
+- Ask first with the ConfirmDialog (never `window.confirm`) and say what happens, e.g.
+  "HAR sends it Ctrl-C, then force-stops it after 2 seconds."
 
 Buttons should be compact and operational. Avoid oversized marketing-style CTAs.
 
@@ -186,6 +197,8 @@ QUEUED     amber
 RUNNING    lime
 COMPLETED  green
 FAILED     red
+STOPPED    light gray   stopped by request; not an error, so never red
+ONLINE     green
 OFFLINE    gray
 ```
 
@@ -203,6 +216,14 @@ TRANSFER  amber
 ```
 
 Do not use color alone to communicate backend identity. Always include the label.
+
+Wording rule: badges show the short tag; text shows a plain word plus the tag.
+
+```text
+CPU     -> "CPU" (or the chip name, e.g. "Apple M5")
+MPS     -> "Apple GPU · MPS"
+CUDA    -> "NVIDIA GPU · CUDA" (or the card name)
+```
 
 ## Cards
 
@@ -222,34 +243,35 @@ Useful card types:
 - Trace operation card.
 - Recent workload row.
 
-## Runtime Overview
+## Overview
 
-The Runtime screen should prioritize:
+The Overview screen should prioritize:
 
-1. Active workload.
-2. Current placement and execution state.
-3. Device health.
-4. Recent workload history.
+1. What is running now, and where.
+2. Which computers are ready, with their backends.
+3. Recent script results.
 
-Do not put benchmark configuration fields on this screen.
+Do not put benchmark configuration or benchmark history on this screen.
 
-## Workloads
+## Scripts
 
-The Workloads screen should prioritize:
+The Scripts screen should prioritize:
 
-- Python entrypoint.
-- Runtime placement policy.
-- Target device preference.
-- Run state.
-- Queue visibility.
+- The selected run: computer, duration, result, and its live output.
+- Run history beside it, newest first.
+- Stopping a run that is going wrong.
 
-Use language such as `Launch workload`, `Placement policy`, and `Run with HAR`.
+Avoid language such as `Run benchmark` outside the Benchmarks page.
 
-Avoid language such as `Run benchmark` unless the user is explicitly in profiling mode.
+## Devices
 
-## Traces
+One card per computer, not one per backend. A computer has one status and one Disconnect;
+its backends are rows inside the card.
 
-Trace views should make execution explainable:
+## Benchmarks (dev tools) and traces
+
+Label runs by workload (Matrix multiply, Image model, Tree traversal), never a generic
+"calculation". Trace views should make execution explainable:
 
 - Every operation has a name and backend.
 - Transfers are visually distinct from computation.

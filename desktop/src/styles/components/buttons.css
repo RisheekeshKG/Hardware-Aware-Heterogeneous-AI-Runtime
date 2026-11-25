@@ -144,8 +144,8 @@
 
 /* Keyboard focus: a clear accent ring, never on mouse click. */
 button:focus-visible,
-[role='radio']:focus-visible,
-.editor-load:focus-within {
+summary:focus-visible,
+[role='radio']:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

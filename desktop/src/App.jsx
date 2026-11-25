@@ -41,7 +41,7 @@ export function App() {
 
 function Shell() {
   const { page, deviceId } = useNavigation()
-  const { pairing } = useRuntime()
+  const { pairing, status } = useRuntime()
   const Page = pages[page] || OverviewView
   // A new page starts at the top, not wherever the previous one was scrolled to.
   useEffect(() => { window.scrollTo(0, 0) }, [page, deviceId])
@@ -50,9 +50,14 @@ function Shell() {
     <main className="main-content">
       <Topbar />
       <ConnectionBanner />
-      <Page />
+      {status === 'starting' ? <PageLoading /> : <Page />}
     </main>
     <ModalHost />
     {pairing[0] && <PairingPrompt key={pairing[0].id} request={pairing[0]} />}
   </div>
+}
+
+// Before the first answer from the runtime, empty lists would read as "nothing here".
+function PageLoading() {
+  return <div className="page-loading" role="status"><span className="status-dot warn" />Connecting to HAR…</div>
 }

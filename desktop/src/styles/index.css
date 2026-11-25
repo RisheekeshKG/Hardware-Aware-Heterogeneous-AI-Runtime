@@ -10,6 +10,7 @@
 @import './components/metrics.css';
 @import './components/modal.css';
 @import './components/dropdown.css';
+@import './components/editor.css';
 @import './views/overview.css';
 @import './views/scripts.css';
 @import './views/devices.css';

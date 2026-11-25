@@ -354,3 +354,14 @@
 .detail-note code {
   color: var(--text-secondary);
 }
+
+.page-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 240px;
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  color: var(--text-muted);
+  font: 11px var(--font-mono);
+}
