@@ -1,0 +1,1 @@
+export function EmptyState({ title, detail, action, onAction }) { return <div className="empty-state"><strong>{title}</strong><span>{detail}</span>{action && <button className="secondary-button" onClick={onAction}>{action} <span>-&gt;</span></button>}</div> }
