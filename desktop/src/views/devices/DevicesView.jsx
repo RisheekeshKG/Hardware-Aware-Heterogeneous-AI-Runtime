@@ -27,7 +27,7 @@ export function DevicesView() {
     {role === 'worker' && <WorkerConnectionPanel />}
     {role === 'worker' && <TrustedHostsPanel />}
     <section className="computer-grid">
-      {list.map((computer) => <ComputerCard key={computer.id} computer={computer} />)}
+      {list.map((computer) => <ComputerCard key={computer.id} computer={computer} footer={<Button variant="text" iconAfter={<ArrowRightIcon />} onClick={() => go('device', { deviceId: computer.id })}>Details</Button>} />)}
       {canAdd && list.length === 1 && <button type="button" className="add-computer-card" onClick={() => openModal('connect')}>
         <PlusIcon /><strong>Add another computer</strong><span>Set HAR to Worker on the other computer, then connect it here. Both must be on the same network.</span>
       </button>}

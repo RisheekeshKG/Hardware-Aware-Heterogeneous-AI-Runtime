@@ -39,8 +39,8 @@ export function ComputerCard({ computer, footer }) {
       </div>) : <p className="empty-copy">No usable backends reported.</p>}
     </div>
     <div className="computer-card-foot">
-      {footer}
       {!computer.isLocal && <Button variant="text" className="danger-text" onClick={disconnect}>Disconnect</Button>}
+      {footer}
     </div>
   </article>
 }

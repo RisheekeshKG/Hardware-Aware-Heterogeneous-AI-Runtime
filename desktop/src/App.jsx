@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { ConfirmProvider } from './app/ConfirmProvider.jsx'
 import { ModalHost } from './app/ModalHost.jsx'
 import { NavigationProvider, useNavigation } from './app/NavigationProvider.jsx'
@@ -7,6 +8,7 @@ import { Sidebar } from './app/Sidebar.jsx'
 import { ConnectionBanner, Topbar } from './app/Topbar.jsx'
 import { ToastProvider } from './app/ToastProvider.jsx'
 import { BenchmarksView } from './views/benchmarks/BenchmarksView.jsx'
+import { DeviceDetailView } from './views/devices/DeviceDetailView.jsx'
 import { DevicesView } from './views/devices/DevicesView.jsx'
 import { OverviewView } from './views/overview/OverviewView.jsx'
 import { ScriptsView } from './views/scripts/ScriptsView.jsx'
@@ -17,6 +19,7 @@ const pages = {
   overview: OverviewView,
   scripts: ScriptsView,
   devices: DevicesView,
+  device: DeviceDetailView,
   settings: SettingsView,
   benchmarks: BenchmarksView,
 }
@@ -37,9 +40,11 @@ export function App() {
 }
 
 function Shell() {
-  const { page } = useNavigation()
+  const { page, deviceId } = useNavigation()
   const { pairing } = useRuntime()
   const Page = pages[page] || OverviewView
+  // A new page starts at the top, not wherever the previous one was scrolled to.
+  useEffect(() => { window.scrollTo(0, 0) }, [page, deviceId])
   return <div className="app-shell">
     <Sidebar />
     <main className="main-content">
