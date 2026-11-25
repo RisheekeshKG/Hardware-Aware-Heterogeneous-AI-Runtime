@@ -1,35 +1,43 @@
-// Devices: one card per computer, a detail page for each, adding computers, worker connection.
+// Devices: your computers on the left, the selected one's details on the right; adding computers.
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { backendTitle, computers, formatBytes, formatRelative, isActive, workloadLabel } from '../helpers.js'
 import { ScriptRow } from '../pages/Scripts.jsx'
 import { useAction, useNavigation, useRuntime, useToast } from '../state.jsx'
-import { ArrowRightIcon, BackendBadge, Button, EmptyState, Field, MemoryBar, Modal, ModalActions, PageHeader, PlusIcon, RefreshButton, SectionHeading, StatusBadge } from '../ui.jsx'
+import { ArrowRightIcon, BackendBadge, Button, Field, IconButton, InfoList, MemoryBar, Modal, ModalActions, Pane, PencilIcon, PlusIcon, RefreshIcon, StatusBadge, Workspace } from '../ui.jsx'
 
-const ROLE_LINE = {
-  host: 'This computer is the host: it runs scripts and can send them to computers you add.',
-  worker: 'This computer is a worker: a host on your network can send scripts here.',
-  standalone: 'This computer is standalone: it only runs its own scripts and is not reachable from the network.',
+const ROLE_NOTE = {
+  host: 'This computer is the host and can send scripts to computers you add',
+  worker: 'This computer is a worker: a host on your network sends scripts here',
+  standalone: 'Standalone: only this computer, not reachable from the network',
 }
 
 export function DevicesPage() {
   const { devices, nodes, system, session, refresh } = useRuntime()
-  const { go, openModal } = useNavigation()
+  const { deviceId, go, openModal } = useNavigation()
   const role = session?.role
   const list = computers(devices, nodes, system)
+  const selected = list.find((computer) => computer.id === deviceId) || list[0]
   const canAdd = role !== 'worker' && role !== 'standalone'
-  return <>
-    <PageHeader eyebrow="DEVICES" title="Devices" description="The computers HAR can send work to, and what each one can run on." action={<div className="header-actions"><RefreshButton onClick={refresh} title="Refresh devices" />{canAdd && <Button variant="primary" icon={<PlusIcon />} onClick={() => openModal('connect')}>Add device</Button>}</div>} />
-    {role && <div className="role-summary"><span>{ROLE_LINE[role] || `Role: ${role}`}</span><Button variant="text" iconAfter={<ArrowRightIcon />} onClick={() => go('settings')}>Change role</Button></div>}
-    {role === 'worker' && <WorkerConnectionPanel />}
-    {role === 'worker' && <TrustedHostsPanel />}
-    <section className="computer-grid">
-      {list.map((computer) => <ComputerCard key={computer.id} computer={computer} footer={<Button variant="text" iconAfter={<ArrowRightIcon />} onClick={() => go('device', { deviceId: computer.id })}>Details</Button>} />)}
-      {canAdd && list.length === 1 && <button type="button" className="add-computer-card" onClick={() => openModal('connect')}>
-        <PlusIcon /><strong>Add another computer</strong><span>Set HAR to Worker on the other computer, then connect it here. Both must be on the same network.</span>
-      </button>}
-    </section>
-  </>
+  return <Workspace title="Devices" note={ROLE_NOTE[role] || ''} actions={<>
+    <IconButton icon={<RefreshIcon />} label="Refresh" onClick={refresh} />
+    <Button variant="text" onClick={() => go('settings')}>Change role</Button>
+    {canAdd && <Button variant="primary" icon={<PlusIcon />} onClick={() => openModal('connect')}>Add device</Button>}
+  </>}>
+    <div className="workspace-split">
+      <nav className="split-list" aria-label="Computers">
+        <div className="split-list-head"><span className="eyebrow">COMPUTERS</span><span className="chart-meta">{list.length}</span></div>
+        <ul className="row-list">{list.map((computer) => <li key={computer.id}>
+          <button type="button" className={`list-row ${computer.status} ${computer.id === selected?.id ? 'active' : ''}`} aria-current={computer.id === selected?.id ? 'true' : undefined} onClick={() => go('devices', { deviceId: computer.id })}>
+            <span className={`status-dot ${computer.status === 'online' ? '' : 'offline'}`} />
+            <span className="list-row-main"><strong>{computer.name}</strong><span>{computer.isLocal ? 'This computer' : computer.status === 'online' ? 'Other computer' : 'Not responding'} · {computer.backends.map((backend) => backend.backend.toUpperCase()).join(' ')}</span></span>
+          </button>
+        </li>)}</ul>
+        {canAdd && <button type="button" className="add-row" onClick={() => openModal('connect')}><PlusIcon /> Add another computer</button>}
+      </nav>
+      <div className="split-detail">{selected && <ComputerDetail key={selected.id} computer={selected} role={role} />}</div>
+    </div>
+  </Workspace>
 }
 
 function hostSummary(host) {
@@ -38,61 +46,22 @@ function hostSummary(host) {
   return [os, host.architecture?.machine, host.runtime?.python_version && `Python ${host.runtime.python_version}`].filter(Boolean).join(' · ')
 }
 
-// One card per computer, with one row per backend it can run on.
-function ComputerCard({ computer, footer }) {
-  const { cpuInfo } = useRuntime()
-  const action = useAction()
-  const disconnect = () => action({
-    confirm: { title: `Disconnect ${computer.name}?`, message: 'HAR will stop sending tasks to it. Anything running there now is marked failed. You can add it again later.', confirmLabel: 'Disconnect' },
-    run: () => api.disconnectNode(computer.id).catch((error) => { if (error.status !== 404) throw error }),
-    success: `${computer.name} disconnected.`,
-    failure: 'Could not disconnect',
-  })
-  return <article className={`panel computer-card ${computer.status}`}>
-    <div className="computer-card-head">
-      <div><span className="eyebrow">{computer.isLocal ? 'THIS COMPUTER' : 'OTHER COMPUTER'}</span><h2>{computer.name}</h2>{hostSummary(computer.host) && <p>{hostSummary(computer.host)}</p>}</div>
-      <StatusBadge status={computer.status} />
-    </div>
-    <div className="backend-rows">
-      {computer.backends.length ? computer.backends.map((backend) => <div className="backend-row" key={backend.backend}>
-        <BackendBadge backend={backend.backend} />
-        <div className="backend-row-main">
-          <strong>{backendTitle(backend, computer.isLocal ? cpuInfo : null)}</strong>
-          <span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free of ${formatBytes(backend.memory.total_bytes)}${backend.memory.estimated ? ' (estimate)' : ''}` : 'Memory unknown'}</span>
-          <MemoryBar memory={backend.memory} backend={backend.backend} />
-        </div>
-      </div>) : <p className="empty-copy">No usable backends reported.</p>}
-    </div>
-    <div className="computer-card-foot">
-      {!computer.isLocal && <Button variant="text" className="danger-text" onClick={disconnect}>Disconnect</Button>}
-      {footer}
-    </div>
-  </article>
-}
-
-export function DeviceDetailPage() {
-  const { deviceId, go } = useNavigation()
-  const { devices, nodes, system } = useRuntime()
-  const computer = computers(devices, nodes, system).find((item) => item.id === deviceId)
-  if (!computer) {
-    return <>
-      <PageHeader eyebrow="DEVICES" title="Device not found" description="It was disconnected, or HAR restarted and it hasn't reconnected yet." />
-      <EmptyState title="Nothing to show" detail="Go back to the device list to see what is connected now." action="Back to devices" onAction={() => go('devices')} />
-    </>
-  }
+function ComputerDetail({ computer, role }) {
   return <>
-    <PageHeader eyebrow={computer.isLocal ? 'THIS COMPUTER' : 'OTHER COMPUTER'} title={computer.name} description={hostSummary(computer.host) || (computer.isLocal ? '' : computer.node?.base_url)} action={<DeviceActions computer={computer} />} />
-    <div className="device-detail-grid">
-      <BackendsPanel computer={computer} />
-      <CurrentWorkPanel computer={computer} />
+    <ComputerHeader computer={computer} />
+    {computer.isLocal && role === 'worker' && <WorkerConnectionPane />}
+    {computer.isLocal && role === 'worker' && <TrustedHostsPane />}
+    <div className="pane-grid">
+      <BackendsPane computer={computer} />
+      <CurrentWorkPane computer={computer} />
     </div>
-    <HostPanel computer={computer} />
+    <SystemPane computer={computer} />
     <EnvironmentPanel computer={computer} />
     <RecentScripts computer={computer} />
   </>
 }
 
-function DeviceActions({ computer }) {
+function ComputerHeader({ computer }) {
   const { go } = useNavigation()
   const { refresh } = useRuntime()
   const notify = useToast()
@@ -100,7 +69,6 @@ function DeviceActions({ computer }) {
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(computer.name)
   const [saving, setSaving] = useState(false)
-  if (computer.isLocal) return <StatusBadge status={computer.status} />
 
   const save = async (event) => {
     event.preventDefault()
@@ -121,57 +89,59 @@ function DeviceActions({ computer }) {
       success: `${computer.name} disconnected.`,
       failure: 'Could not disconnect',
     })
-    if (done) go('devices')
+    if (done) go('devices', { deviceId: null })
   }
 
-  if (renaming) {
-    return <form className="rename-form" onSubmit={save}>
-      <input aria-label="New name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus disabled={saving} />
-      <Button type="submit" variant="primary" disabled={saving || !name.trim()}>Save</Button>
-      <Button onClick={() => { setRenaming(false); setName(computer.name) }} disabled={saving}>Cancel</Button>
-    </form>
-  }
-  return <div className="header-actions">
-    <StatusBadge status={computer.status} />
-    <Button onClick={() => { setName(computer.name); setRenaming(true) }}>Rename</Button>
-    <Button variant="danger" onClick={disconnect}>Disconnect</Button>
+  return <div className="detail-head">
+    <div className="detail-title">
+      {renaming
+        ? <form className="rename-form" onSubmit={save}>
+            <input aria-label="New name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} autoFocus disabled={saving} />
+            <Button type="submit" variant="primary" disabled={saving || !name.trim()}>Save</Button>
+            <Button onClick={() => { setRenaming(false); setName(computer.name) }} disabled={saving}>Cancel</Button>
+          </form>
+        : <h2>{computer.name}{!computer.isLocal && <IconButton icon={<PencilIcon />} label="Rename" className="inline-icon" onClick={() => { setName(computer.name); setRenaming(true) }} />}</h2>}
+      <span>{[computer.isLocal ? 'This computer' : 'Other computer', hostSummary(computer.host), !computer.isLocal && computer.node?.base_url].filter(Boolean).join(' · ')}</span>
+    </div>
+    <div className="detail-actions">
+      <StatusBadge status={computer.status} />
+      {!computer.isLocal && <Button variant="danger" onClick={disconnect}>Disconnect</Button>}
+    </div>
   </div>
 }
 
-function BackendsPanel({ computer }) {
+function BackendsPane({ computer }) {
   const { cpuInfo } = useRuntime()
-  return <section className="panel device-panel">
-    <SectionHeading compact eyebrow="BACKENDS" title={`${computer.backends.length} available`} />
-    <div className="backend-rows">{computer.backends.length ? computer.backends.map((backend) => <div className="backend-row" key={backend.backend}>
+  return <Pane title="BACKENDS" meta={computer.backends.length}>
+    {computer.backends.length ? <div className="backend-rows">{computer.backends.map((backend) => <div className="backend-row" key={backend.backend}>
       <BackendBadge backend={backend.backend} />
       <div className="backend-row-main">
         <strong>{backendTitle(backend, computer.isLocal ? cpuInfo : null)}</strong>
         <span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free of ${formatBytes(backend.memory.total_bytes)} · ${backend.memory.estimated ? 'estimated' : 'measured'}` : (backend.memory?.unavailable_reason || 'Memory unknown')}</span>
         <MemoryBar memory={backend.memory} backend={backend.backend} />
       </div>
-    </div>) : <p className="empty-copy">This computer reported no usable backends.</p>}</div>
-  </section>
+    </div>)}</div> : <p className="pane-empty">This computer reported no usable backends.</p>}
+  </Pane>
 }
 
 // Derived from the script and benchmark lists: the heartbeat's active_job is not reliable.
-function CurrentWorkPanel({ computer }) {
+function CurrentWorkPane({ computer }) {
   const { scripts, runs } = useRuntime()
   const { go } = useNavigation()
   const target = (value) => (value || 'local') === computer.id
   const activeScripts = scripts.filter((script) => target(script.target_node) && isActive(script.status))
   const activeRuns = runs.filter((run) => target(run.node_id) && isActive(run.status))
   const count = activeScripts.length + activeRuns.length
-  return <section className="panel device-panel">
-    <SectionHeading compact eyebrow="RIGHT NOW" title={count ? `${count} running` : 'Idle'} />
-    {count ? <ul className="work-list">
-      {activeScripts.map((script) => <li key={script.id}><button type="button" onClick={() => go('scripts', { scriptId: script.id })}><span className={`workload-pulse ${script.status}`} /><strong>{script.filename}</strong><span>script · {script.status}</span></button></li>)}
-      {activeRuns.map((run) => <li key={run.id}><button type="button" onClick={() => go('benchmarks', { runId: run.id })}><span className={`workload-pulse ${run.status}`} /><strong>{workloadLabel(run.request)}</strong><span>benchmark · {run.status}</span></button></li>)}
-    </ul> : <p className="empty-copy">Nothing is running on {computer.isLocal ? 'this computer' : computer.name}.</p>}
+  return <Pane title="RIGHT NOW" meta={count ? `${count} running` : 'idle'}>
+    {count ? <ul className="row-list">
+      {activeScripts.map((script) => <li key={script.id}><button type="button" className="list-row" onClick={() => go('scripts', { scriptId: script.id })}><span className={`workload-pulse ${script.status}`} /><span className="list-row-main"><strong>{script.filename}</strong><span>script</span></span><StatusBadge status={script.status} /></button></li>)}
+      {activeRuns.map((run) => <li key={run.id}><button type="button" className="list-row" onClick={() => go('benchmarks', { runId: run.id })}><span className={`workload-pulse ${run.status}`} /><span className="list-row-main"><strong>{workloadLabel(run.request)}</strong><span>benchmark</span></span><StatusBadge status={run.status} /></button></li>)}
+    </ul> : <p className="pane-empty">Nothing is running on {computer.isLocal ? 'this computer' : computer.name}.</p>}
     {!computer.isLocal && computer.node?.last_seen && <p className="detail-note">Last heard from {formatRelative(computer.node.last_seen)}.</p>}
-  </section>
+  </Pane>
 }
 
-function HostPanel({ computer }) {
+function SystemPane({ computer }) {
   const host = computer.host
   if (!host) return null
   const rows = [
@@ -183,12 +153,8 @@ function HostPanel({ computer }) {
     ['Python', host.runtime?.python_version],
     ['PyTorch', host.runtime ? (host.runtime.pytorch_version || 'Not installed') : null],
     ['CUDA', host.runtime ? (host.runtime.cuda_runtime || 'Not available') : null],
-    ['Address', computer.isLocal ? null : computer.node?.base_url],
   ].filter(([, value]) => value)
-  return <section className="panel settings-panel">
-    <SectionHeading compact eyebrow="SYSTEM" title="Hardware and software" />
-    <dl className="settings-list">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-  </section>
+  return <Pane title="SYSTEM"><InfoList rows={rows} /></Pane>
 }
 
 // Remote: compare its Python packages with this host's. Fetched on open and on
@@ -206,8 +172,7 @@ function EnvironmentPanel({ computer }) {
   const packages = computer.isLocal ? data?.packages : data?.worker?.packages
   const hostPackages = computer.isLocal ? null : data?.host?.packages
   const verdict = computer.isLocal ? null : data ? (data.compatible ? 'Matches this host' : `${data.mismatches.length} difference${data.mismatches.length === 1 ? '' : 's'}`) : null
-  return <section className="panel settings-panel">
-    <SectionHeading compact eyebrow="PYTHON ENVIRONMENT" title={computer.isLocal ? 'Packages HAR uses' : verdict || 'Compared with this host'} action={<Button variant="text" onClick={check} disabled={loading}>{loading ? 'Checking…' : 'Check again'}</Button>} />
+  return <Pane title="PYTHON PACKAGES" meta={computer.isLocal ? 'used by HAR here' : verdict || 'compared with this host'} actions={<Button variant="text" onClick={check} disabled={loading}>{loading ? 'Checking…' : 'Check again'}</Button>}>
     {error && <div className="form-error">Could not check: {error}</div>}
     {!computer.isLocal && data && !data.compatible && <p className="detail-note warn">Scripts that work here may fail there. Install the same versions on both computers.</p>}
     {packages && <table className="env-table">
@@ -217,17 +182,16 @@ function EnvironmentPanel({ computer }) {
         {Object.entries(packages).map(([name, version]) => <tr key={name}><td>{name}</td><td>{version}</td>{hostPackages && <td className={hostPackages[name] !== version ? 'mismatch' : ''}>{hostPackages[name] ?? 'absent'}</td>}</tr>)}
       </tbody>
     </table>}
-  </section>
+  </Pane>
 }
 
 function RecentScripts({ computer }) {
   const { scripts } = useRuntime()
   const mine = scripts.filter((script) => (script.target_node || 'local') === computer.id).slice(0, 8)
   if (!mine.length) return null
-  return <section className="section-block">
-    <SectionHeading eyebrow="RECENT" title={`Scripts on ${computer.isLocal ? 'this computer' : computer.name}`} />
+  return <Pane title="RECENT SCRIPTS HERE" meta={mine.length}>
     <div className="script-list">{mine.map((script) => <ScriptRow key={script.id} script={script} />)}</div>
-  </section>
+  </Pane>
 }
 
 export function AddDeviceDialog({ onClose }) {
@@ -285,7 +249,7 @@ export function AddDeviceDialog({ onClose }) {
   </Modal>
 }
 
-function WorkerConnectionPanel() {
+function WorkerConnectionPane() {
   const { workerConnection: connection } = useRuntime()
   const action = useAction()
   if (!connection) return null
@@ -297,22 +261,23 @@ function WorkerConnectionPanel() {
     failure: 'Could not stop',
   })
   if (connection.status === 'unsupported') {
-    return <section className="panel worker-connection"><span className="status-dot warn" /><div><strong>Connection status needs a newer runtime</strong><span>The installed runtime is older than this app, so it can't report which host is connected. Update the runtime to see it here.</span></div></section>
+    return <Pane title="WORKING FOR"><p className="pane-empty">The installed runtime is older than this app, so it can't report which host is connected.</p></Pane>
   }
   const ago = (seconds) => seconds == null ? '' : seconds < 2 ? 'just now' : `${Math.round(seconds)}s ago`
   const jobs = connection.jobs_received ? ` · ${connection.jobs_received} task${connection.jobs_received === 1 ? '' : 's'} received${connection.running_jobs ? `, ${connection.running_jobs} running` : ''}` : ''
   const views = {
-    connected: { dot: '', title: `Connected to host ${host}`, detail: `Last contact ${ago(connection.seconds_since_contact)}${jobs}. This computer is ready to take tasks from it.` },
+    connected: { dot: '', title: `Connected to host ${host}`, detail: `Last contact ${ago(connection.seconds_since_contact)}${jobs}.` },
     unreachable: { dot: 'error', title: `Can't reach host ${host}`, detail: `${connection.last_error ? `${connection.last_error}. ` : ''}Retrying every 5 seconds. Check that the host is running HAR and both computers are on the same network.` },
-    waiting: { dot: 'warn', title: 'Waiting for a host', detail: "No host is connected yet. On the host, choose Add device and enter this PC's address." },
-    disconnected: { dot: 'warn', title: 'The host disconnected this computer', detail: 'It will stop sending tasks. Add this computer again on the host to reconnect.' },
+    waiting: { dot: 'warn', title: 'Waiting for a host', detail: "No host is connected yet. On the host, choose Add device and enter this computer's address." },
+    disconnected: { dot: 'warn', title: 'The host disconnected this computer', detail: 'Add this computer again on the host to reconnect.' },
   }
   const view = views[connection.status] || views.waiting
-  const hasHost = Boolean(connection.coordinator)
-  return <section className="panel worker-connection"><span className={`status-dot ${view.dot}`} /><div><span className="eyebrow">WORKING FOR</span><strong>{view.title}</strong><span>{view.detail}</span></div>{hasHost && <button type="button" className="secondary-button device-disconnect worker-stop-serving" onClick={onStopServing}>Stop working for this host</button>}</section>
+  return <Pane title="WORKING FOR" actions={connection.coordinator ? <Button variant="text" className="danger-text" onClick={onStopServing}>Stop working for this host</Button> : null}>
+    <div className="connection-line"><span className={`status-dot ${view.dot}`} /><div><strong>{view.title}</strong><span>{view.detail}</span></div></div>
+  </Pane>
 }
 
-function TrustedHostsPanel() {
+function TrustedHostsPane() {
   const { trustedHosts: hosts } = useRuntime()
   const action = useAction()
   if (!hosts || hosts.length === 0) return null
@@ -322,19 +287,10 @@ function TrustedHostsPanel() {
     success: `${ip} is no longer trusted.`,
     failure: 'Could not revoke',
   })
-  return <section className="panel trusted-hosts-panel">
-    <div className="section-heading compact">
-      <div><div className="eyebrow">HOSTS CONNECTED TO THIS COMPUTER</div><h2>{hosts.length} host{hosts.length === 1 ? '' : 's'} can send tasks here</h2></div>
-      <span className="eyebrow trusted-hosts-warn">AUDIT REGULARLY</span>
-    </div>
-    <p className="empty-copy">Each host below has previously been accepted and can run Python and benchmarks on this computer. Revoke any you don't recognize.</p>
-    <div className="trusted-hosts-list">
-      {hosts.map((host) => <div className="trusted-host-row" key={host.client_ip}>
-        <div><strong>{host.client_ip}</strong><span>Trusted</span></div>
-        <button type="button" className="secondary-button device-disconnect" onClick={() => onRevoke(host.client_ip)}>Revoke</button>
-      </div>)}
-    </div>
-  </section>
+  return <Pane title="HOSTS THAT CAN SEND TASKS HERE" meta={hosts.length}>
+    <p className="detail-note">Each of these was accepted before and can run Python on this computer. Revoke any you don't recognise.</p>
+    <ul className="row-list">{hosts.map((host) => <li key={host.client_ip} className="host-row"><strong>{host.client_ip}</strong><Button variant="text" className="danger-text" onClick={() => onRevoke(host.client_ip)}>Revoke</Button></li>)}</ul>
+  </Pane>
 }
 
 export function PairingPrompt({ request }) {

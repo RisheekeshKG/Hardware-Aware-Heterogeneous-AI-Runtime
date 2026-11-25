@@ -6,12 +6,15 @@ are a dev tool, not the home screen.
 
 ## Pages
 
+Every page has the same shape as the Scripts editor: one frame with a slim header bar (title,
+a one-line note, actions on the right), and compact titled panes inside. The app sidebar is an
+icon rail; hover an icon for its name.
+
 ```mermaid
 flowchart LR
   subgraph Workspace
     O[Overview] --> S[Scripts]
     O --> D[Devices]
-    D --> DD[Device detail]
     ST[Settings]
   end
   subgraph Dev tools
@@ -19,14 +22,13 @@ flowchart LR
   end
 ```
 
-| Page | What it shows | Main actions |
-|---|---|---|
-| **Overview** | Running scripts (live elapsed time), one row per computer with its backends, recent scripts, PyTorch version | New script, Stop |
-| **Scripts** | Run history beside the selected run (stacked below 1280 px): computer, start, duration, result, live output, timing and hardware (folded) | New script, Stop, Copy output |
-| **Devices** | One card per computer, one row per backend with memory; role summary; worker connection and trusted hosts in Worker role | Add device (host only), Details, Disconnect |
-| **Device detail** | Backends, what is running there now, OS/CPU/memory/Python/PyTorch, Python packages (compared with this host for a worker) | Rename, Disconnect, Check again |
-| **Settings** | Role (Host / Worker / Standalone), PyTorch status, About (app version, Python, MPS/CUDA, API address, environment hash) | Switch role, Install / Repair / Reinstall PyTorch |
-| **Benchmarks** | Matrix multiply, image model and tree traversal runs; selected run's metrics and trace | Start benchmark |
+| Page | Layout | What it shows | Main actions |
+|---|---|---|---|
+| **Overview** | one column | Four numbers (running, computers ready, finished, PyTorch), running scripts, computers, recent scripts | Open editor, Stop |
+| **Scripts** | editor | Files and runs on the left; tabs, editor and output console on the right. Files live in `~/HAR/scripts` | New / rename / delete file, Run (⌘↵), Stop, Save (⌘S) |
+| **Devices** | list + detail | Computers on the left; the selected one's backends, what's running there, system info, Python packages, recent scripts | Add device, Rename, Disconnect, Check again |
+| **Settings** | one column | Role (Host / Worker / Standalone), PyTorch, About | Switch role, Install / Repair / Reinstall PyTorch |
+| **Benchmarks** | list + detail | Runs on the left; the selected run's result and settings | Start benchmark |
 
 First launch shows a setup screen until PyTorch is installed (or skipped).
 

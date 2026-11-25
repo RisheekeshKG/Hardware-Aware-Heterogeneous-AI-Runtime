@@ -4,15 +4,16 @@ import { API, api, appVersion, desktopInvoke, isDesktop } from '../api.js'
 import { isActive } from '../helpers.js'
 import { TorchInstallProgress, isBrokenTorch, useTorchInstall } from '../pages/Setup.jsx'
 import { useConfirm, useNavigation, useRuntime, useToast } from '../state.jsx'
-import { Button, CopyIcon, PageHeader, SectionHeading } from '../ui.jsx'
+import { Button, CopyIcon, InfoList, Pane, Workspace } from '../ui.jsx'
 
 export function SettingsPage() {
-  return <>
-    <PageHeader eyebrow="SETTINGS" title="Settings" description="How this computer takes part, and what HAR is running on." />
-    <RolePanel />
-    <PyTorchPanel />
-    <AboutPanel />
-  </>
+  return <Workspace title="Settings" note="How this computer takes part, and what HAR is running on">
+    <div className="workspace-scroll narrow">
+      <RolePanel />
+      <PyTorchPanel />
+      <AboutPanel />
+    </div>
+  </Workspace>
 }
 
 function AboutPanel() {
@@ -32,12 +33,9 @@ function AboutPanel() {
     ['NVIDIA CUDA', runtime ? (runtime.cuda_runtime || 'Not available') : '…'],
     ['API address', API],
     ['Session', session?.session_id || '…'],
-    ['Environment', env ? <>{env.hash} · {Object.values(env.packages).filter((v) => v !== 'absent').length} packages <button className="link-button" onClick={() => go('device', { deviceId: 'local' })}>See packages</button></> : '…'],
+    ['Environment', env ? <>{env.hash} · {Object.values(env.packages).filter((v) => v !== 'absent').length} packages <button className="link-button" onClick={() => go('devices', { deviceId: 'local' })}>See packages</button></> : '…'],
   ]
-  return <section className="panel settings-panel">
-    <SectionHeading compact eyebrow="ABOUT" title="This installation" />
-    <dl className="settings-list">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-  </section>
+  return <Pane title="ABOUT THIS INSTALLATION"><InfoList rows={rows} /></Pane>
 }
 
 const ROLES = [
@@ -78,8 +76,7 @@ function RolePanel() {
     try { setRole(await desktopInvoke('set_runtime_role', { role: next })) } catch (roleError) { setError(roleError.toString()) } finally { setSwitching(false) }
   }
 
-  return <section className="panel settings-panel">
-    <SectionHeading compact eyebrow="THIS COMPUTER'S ROLE" title={ROLES.find((item) => item.id === current)?.label || '…'} />
+  return <Pane title="THIS COMPUTER'S ROLE" meta={ROLES.find((item) => item.id === current)?.label || '…'}>
     <div className="role-cards" role="radiogroup" aria-label="Role">
       {ROLES.map((option) => <button key={option.id} type="button" role="radio" aria-checked={current === option.id} className={`role-card ${current === option.id ? 'active' : ''}`} onClick={() => change(option.id)} disabled={!isDesktop() || switching}>
         <strong>{option.label}</strong><span>{option.detail}</span>
@@ -90,7 +87,7 @@ function RolePanel() {
     {lanAddress && <div className="role-address"><span>This computer's address</span><code>{lanAddress}</code><Button variant="text" icon={<CopyIcon />} onClick={() => copy(lanAddress)}>Copy</Button></div>}
     {current === 'worker' && <div className="role-address"><span>On the host, choose <strong>Add device</strong> and enter</span><code>{workerAddress || '<this computer’s IP>:9000'}</code>{workerAddress && <Button variant="text" icon={<CopyIcon />} onClick={() => copy(workerAddress)}>Copy</Button>}</div>}
     {error && <div className="form-error">{error}</div>}
-  </section>
+  </Pane>
 }
 
 function PyTorchPanel() {
@@ -132,8 +129,7 @@ function PyTorchPanel() {
     refresh()
   }
 
-  return <section className="panel settings-panel">
-    <SectionHeading compact eyebrow="PYTORCH" title={state} action={isDesktop() && !install.installing ? <Button variant={missing || broken ? 'primary' : 'secondary'} onClick={reinstall} disabled={!status}>{missing ? 'Install PyTorch' : broken ? 'Repair PyTorch' : 'Reinstall'}</Button> : null} />
+  return <Pane title="PYTORCH" meta={state} actions={isDesktop() && !install.installing ? <Button variant={missing || broken ? 'primary' : 'secondary'} onClick={reinstall} disabled={!status}>{missing ? 'Install PyTorch' : broken ? 'Repair PyTorch' : 'Reinstall'}</Button> : null}>
     <p className="detail-note">{isDesktop()
       ? 'HAR keeps its own copy of PyTorch, separate from any Python on this computer. Reinstalling fetches the newest build for this hardware.'
       : <>Install or repair PyTorch from the HAR desktop app. This browser is talking to <code>har serve</code>, which uses whatever PyTorch its Python has.</>}</p>
@@ -142,5 +138,5 @@ function PyTorchPanel() {
     <TorchInstallProgress install={install} />
     {install.installing && <Button variant="text" onClick={install.cancel}>Cancel install</Button>}
     {install.error && <div className="form-error setup-error">{install.error}</div>}
-  </section>
+  </Pane>
 }

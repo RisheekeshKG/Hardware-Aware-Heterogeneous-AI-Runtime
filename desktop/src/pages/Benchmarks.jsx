@@ -3,50 +3,64 @@ import { useState } from 'react'
 import { api } from '../api.js'
 import { backendTag, backendTitle, backendsForTarget, benchmarkSpeed, computerOptions, formatDate, formatDuration, friendlyBackend, isActive, nodeLabel, workloadDetail, workloadLabel } from '../helpers.js'
 import { useNavigation, useRuntime, useToast } from '../state.jsx'
-import { ArrowRightIcon, BackendBadge, Button, Dropdown, EmptyState, Field, Metric, Modal, ModalActions, PageHeader, PlusIcon, RefreshButton, SectionHeading, StatusBadge } from '../ui.jsx'
+import { ArrowRightIcon, BackendBadge, Button, Dropdown, EmptyState, Field, IconButton, InfoList, Metric, Modal, ModalActions, Pane, PlusIcon, RefreshIcon, StatusBadge, Workspace } from '../ui.jsx'
 
 export function BenchmarksPage() {
   const { runs, nodes, refresh } = useRuntime()
   const { runId, selectRun, openModal } = useNavigation()
   const selected = runs.find((run) => run.id === runId) || runs[0] || null
   const start = () => openModal('benchmark')
-  return <>
-    <PageHeader eyebrow="DEV TOOLS" title="Benchmarks" description="Built-in workloads for comparing backends. Useful for checking a new computer; not needed to run scripts." action={<div className="header-actions"><RefreshButton onClick={refresh} title="Refresh benchmarks" /><Button variant="primary" icon={<PlusIcon />} onClick={start}>Start benchmark</Button></div>} />
-    {!runs.length ? <EmptyState title="No benchmark runs yet" detail="Pick a workload and a backend to see how fast that computer runs it." action="Start benchmark" onAction={start} /> : <>
-      <div className="benchmark-layout">
-        <section className="panel benchmark-history">
-          <SectionHeading compact eyebrow="HISTORY" title="Runs" action={<span className="chart-meta">{runs.length}</span>} />
-          {runs.slice(0, 12).map((run) => <button type="button" className={`benchmark-session ${run.id === selected?.id ? 'selected' : ''}`} key={run.id} onClick={() => selectRun(run.id)} aria-current={run.id === selected?.id ? 'true' : undefined}>
-            <BackendBadge backend={run.request.backend} />
-            <div><strong>{workloadLabel(run.request)}</strong><span>{workloadDetail(run.request)} · {nodeLabel(run.node_id, nodes)} · {formatDate(run.created_at)}</span></div>
-            <b>{run.result ? formatDuration(run.result.latency_seconds?.median) : isActive(run.status) ? `${run.completed_iterations}/${run.request.measured_iterations}` : '-'}</b>
-            <StatusBadge status={run.status} />
-          </button>)}
-        </section>
-        {selected && <RunDetail run={selected} />}
-      </div>
-    </>}
-  </>
+  return <Workspace title="Benchmarks" note="Dev tool · built-in workloads for comparing backends" actions={<>
+    <IconButton icon={<RefreshIcon />} label="Refresh" onClick={refresh} />
+    <Button variant="primary" icon={<PlusIcon />} onClick={start}>Start benchmark</Button>
+  </>}>
+    {!runs.length
+      ? <div className="workspace-scroll"><EmptyState title="No benchmark runs yet" detail="Pick a workload and a backend to see how fast that computer runs it." action="Start benchmark" onAction={start} /></div>
+      : <div className="workspace-split">
+          <nav className="split-list" aria-label="Benchmark runs">
+            <div className="split-list-head"><span className="eyebrow">RUNS</span><span className="chart-meta">{runs.length}</span></div>
+            <ul className="row-list">{runs.map((run) => <li key={run.id}>
+              <button type="button" className={`list-row ${run.id === selected?.id ? 'active' : ''}`} aria-current={run.id === selected?.id ? 'true' : undefined} onClick={() => selectRun(run.id)}>
+                <BackendBadge backend={run.request.backend} />
+                <span className="list-row-main"><strong>{workloadLabel(run.request)}</strong><span>{workloadDetail(run.request)} · {nodeLabel(run.node_id, nodes)}</span></span>
+                <span className="list-row-time">{run.result ? formatDuration(run.result.latency_seconds?.median) : isActive(run.status) ? `${run.completed_iterations}/${run.request.measured_iterations}` : run.status}</span>
+              </button>
+            </li>)}</ul>
+          </nav>
+          <div className="split-detail">{selected && <RunDetail run={selected} />}</div>
+        </div>}
+  </Workspace>
 }
 
 function RunDetail({ run }) {
+  const { nodes } = useRuntime()
   const result = run.result
   const progress = Math.round((run.completed_iterations / (run.request.measured_iterations || 1)) * 100)
-  return <section className="panel benchmark-card">
-    <div className="eyebrow">SELECTED RUN</div>
-    <h2>{workloadLabel(run.request)}</h2>
-    <p>{friendlyBackend(run.request.backend)} · {workloadDetail(run.request)}</p>
-    {result ? <div className="benchmark-metrics">
-      <Metric label="Median time" value={formatDuration(result.latency_seconds?.median)} />
-      <Metric label="Speed" value={benchmarkSpeed(run)} />
-      <Metric label="Check" value={result.correctness_passed === false ? 'Mismatch' : 'Passed'} />
-      <Metric label="Memory" value={result.device?.memory?.estimated ? 'Estimated' : 'Measured'} />
-    </div> : isActive(run.status) ? <div className="execution-line">
-      <div className="execution-line-head"><span>Progress</span><strong>{run.last_latency_seconds ? formatDuration(run.last_latency_seconds) : 'Warming up'}</strong></div>
+  return <>
+    <div className="detail-head">
+      <div className="detail-title"><h2>{workloadLabel(run.request)}</h2><span>{friendlyBackend(run.request.backend)} · {workloadDetail(run.request)} · {nodeLabel(run.node_id, nodes)} · {formatDate(run.created_at)}</span></div>
+      <div className="detail-actions"><StatusBadge status={run.status} /></div>
+    </div>
+    {result ? <Pane title="RESULT">
+      <div className="metric-grid">
+        <Metric label="Median time" value={formatDuration(result.latency_seconds?.median)} />
+        <Metric label="Speed" value={benchmarkSpeed(run)} />
+        <Metric label="Check" value={result.correctness_passed === false ? 'Mismatch' : 'Passed'} />
+        <Metric label="Memory" value={result.device?.memory?.estimated ? 'Estimated' : 'Measured'} />
+      </div>
+    </Pane> : isActive(run.status) ? <Pane title="PROGRESS" meta={`${run.completed_iterations} / ${run.request.measured_iterations} iterations`}>
       <div className="progress-track"><div style={{ width: `${progress}%` }} /></div>
-      <div className="execution-line-foot"><span>{run.completed_iterations} / {run.request.measured_iterations} iterations</span><span>{run.status}</span></div>
-    </div> : <div className="form-error">{run.error || 'This run failed.'}</div>}
-  </section>
+      <p className="detail-note">{run.last_latency_seconds ? `Last iteration ${formatDuration(run.last_latency_seconds)}` : 'Warming up…'}</p>
+    </Pane> : <Pane title="ERROR"><div className="form-error">{run.error || 'This run failed.'}</div></Pane>}
+    <Pane title="SETTINGS"><InfoList rows={[
+      ['Workload', workloadLabel(run.request)],
+      ['Size', workloadDetail(run.request)],
+      ['Backend', friendlyBackend(run.request.backend)],
+      ['Warm-up runs', run.request.warmup_iterations],
+      ['Measured runs', run.request.measured_iterations],
+      ['Seed', run.request.seed],
+    ]} /></Pane>
+  </>
 }
 
 export function NewBenchmarkDialog({ onClose }) {

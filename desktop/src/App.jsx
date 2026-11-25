@@ -1,8 +1,8 @@
 // The window: first-launch setup, then sidebar + top bar + the open page.
-import { Fragment, useEffect } from 'react'
+import { Fragment } from 'react'
 import { machineSummary, plural } from './helpers.js'
 import { BenchmarksPage, NewBenchmarkDialog } from './pages/Benchmarks.jsx'
-import { AddDeviceDialog, DeviceDetailPage, DevicesPage, PairingPrompt } from './pages/Devices.jsx'
+import { AddDeviceDialog, DevicesPage, PairingPrompt } from './pages/Devices.jsx'
 import { OverviewPage } from './pages/Overview.jsx'
 import { ScriptsPage } from './pages/Scripts.jsx'
 import { SettingsPage } from './pages/Settings.jsx'
@@ -14,7 +14,7 @@ const pages = {
   overview: OverviewPage,
   scripts: ScriptsPage,
   devices: DevicesPage,
-  device: DeviceDetailPage,
+  device: DevicesPage,
   settings: SettingsPage,
   benchmarks: BenchmarksPage,
 }
@@ -35,12 +35,10 @@ export function App() {
 }
 
 function Shell() {
-  const { page, deviceId } = useNavigation()
+  const { page } = useNavigation()
   const { pairing, status } = useRuntime()
   const Page = pages[page] || OverviewPage
-  // A new page starts at the top, not wherever the previous one was scrolled to.
-  useEffect(() => { window.scrollTo(0, 0) }, [page, deviceId])
-  return <div className={`app-shell ${page === 'scripts' ? 'ide-mode' : ''}`}>
+  return <div className="app-shell">
     <Sidebar />
     <main className="main-content">
       <Topbar />
@@ -70,8 +68,6 @@ const navGroups = [
   { id: 'devtools', label: 'Dev tools' },
 ]
 
-// Pages that live under another page in the sidebar and breadcrumbs.
-const subPages = { device: { parent: 'devices' } }
 
 const STATUS_TEXT = {
   starting: { label: 'Starting', dot: 'warn' },
@@ -84,7 +80,7 @@ function Sidebar() {
   const { page, go } = useNavigation()
   const { devices, nodes, status, workerConnection, session } = useRuntime()
   const { machinesReady } = machineSummary(devices, nodes)
-  const activePage = subPages[page]?.parent || page
+  const activePage = page === 'device' ? 'devices' : page
   const state = STATUS_TEXT[status] || STATUS_TEXT.offline
   const detail = status !== 'live'
     ? (status === 'offline' ? 'HAR service not answering' : 'Waiting for HAR service…')
@@ -105,16 +101,11 @@ function Sidebar() {
 }
 
 function Topbar() {
-  const { page, deviceId, go } = useNavigation()
-  const { status, refresh, nodes } = useRuntime()
-  const parent = subPages[page]?.parent
-  const current = navItems.find((item) => item.id === (parent || page))
-  const deviceName = deviceId === 'local' ? 'This computer' : nodes.find((node) => node.node_id === deviceId)?.name || 'Device'
+  const { page } = useNavigation()
+  const { status, refresh } = useRuntime()
+  const current = navItems.find((item) => item.id === (page === 'device' ? 'devices' : page))
   return <header className="topbar">
-    <nav className="breadcrumbs" aria-label="Breadcrumb">
-      <span>HAR</span><i>/</i>
-      {parent ? <><button className="crumb-link" onClick={() => go(parent)}>{current?.label}</button><i>/</i><strong>{deviceName}</strong></> : <strong>{current?.label}</strong>}
-    </nav>
+    <nav className="breadcrumbs" aria-label="Breadcrumb"><span>HAR</span><i>/</i><strong>{current?.label}</strong></nav>
     <div className="topbar-actions">
       <span className="live-pill"><span className={`status-dot ${status === 'live' ? '' : status === 'offline' ? 'error' : 'warn'}`} /> {status === 'live' ? 'Live' : status === 'offline' ? 'Disconnected' : 'Connecting'}</span>
       <IconButton onClick={refresh} label="Refresh now" icon={<RefreshIcon />} />

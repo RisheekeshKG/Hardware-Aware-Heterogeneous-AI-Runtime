@@ -127,23 +127,32 @@ export function Brand() {
   return <div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div>
 }
 
-export function PageHeader({ eyebrow, title, description, action }) {
-  return <div className="page-header"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1>{description && <p>{description}</p>}</div>{action}</div>
+// A page: one bordered frame with a slim header bar, the same shape as the Scripts editor.
+export function Workspace({ title, note, actions, children }) {
+  return <div className="workspace">
+    <header className="workspace-bar">
+      <div className="workspace-title"><strong>{title}</strong>{note && <span>{note}</span>}</div>
+      {actions && <div className="workspace-actions">{actions}</div>}
+    </header>
+    {children}
+  </div>
 }
 
-export function SectionHeading({ eyebrow, title, action, compact = false }) {
-  return <div className={`section-heading ${compact ? 'compact' : ''}`.trim()}>
-    <div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}{title && <h2>{title}</h2>}</div>
-    {action}
-  </div>
+// A titled block inside a page. `meta` sits next to the title; `actions` at the right.
+export function Pane({ title, meta, actions, className = '', children }) {
+  return <section className={`pane ${className}`.trim()}>
+    <div className="pane-head"><span className="eyebrow">{title}</span>{meta != null && meta !== '' && <span className="pane-meta">{meta}</span>}{actions && <span className="pane-actions">{actions}</span>}</div>
+    <div className="pane-body">{children}</div>
+  </section>
+}
+
+// Label/value rows (system info, settings).
+export function InfoList({ rows }) {
+  return <dl className="info-list">{rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
 }
 
 export function EmptyState({ title, detail, action, onAction }) {
   return <div className="empty-state"><strong>{title}</strong><span>{detail}</span>{action && <Button onClick={onAction} iconAfter={<ArrowRightIcon />}>{action}</Button>}</div>
-}
-
-export function RefreshButton({ onClick, title = 'Refresh' }) {
-  return <IconButton className="section-refresh" onClick={onClick} label={title} icon={<RefreshIcon />} />
 }
 
 // Short technical tag (CPU / MPS / CUDA); the full name is the tooltip.
@@ -156,7 +165,6 @@ export function StatusBadge({ status }) {
 }
 
 export function Metric({ label, value }) { return <div className="small-metric"><span>{label}</span><strong>{value}</strong></div> }
-export function StatCard({ label, value, detail, accent }) { return <div className={`stat-card ${accent}`}><span className="eyebrow">{label}</span><strong>{value}</strong><span>{detail}</span></div> }
 
 // Free memory as a share of total, in the backend's colour. Empty when either is unknown.
 export function MemoryBar({ memory, backend, large = false }) {
