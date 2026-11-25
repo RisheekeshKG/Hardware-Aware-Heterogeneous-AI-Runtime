@@ -2,20 +2,22 @@ import { useNavigation } from '../../app/NavigationProvider.jsx'
 import { useRuntime } from '../../app/RuntimeProvider.jsx'
 import { StatusBadge } from '../../components/badges.jsx'
 import { nodeLabel } from '../../lib/devices.js'
-import { formatDate } from '../../lib/format.js'
-import { scriptElapsed } from '../../lib/runs.js'
+import { formatElapsed, formatRelative } from '../../lib/format.js'
+import { scriptDuration, scriptOutcome } from '../../lib/runs.js'
 
-export function ScriptRow({ script, active }) {
+// One script run in a list. Clicking opens it on the Scripts page.
+export function ScriptRow({ script, selected = false }) {
   const { nodes } = useRuntime()
-  const { selectScript } = useNavigation()
-  const onClick = () => selectScript(active ? null : script.id)
-  const elapsed = scriptElapsed(script)
-  const argsText = script.args?.length ? script.args.join(' ') : ''
-  return <button type="button" className={`workload-row script-row ${active ? 'active' : ''}`} onClick={onClick}>
-    <div className="workload-id"><span className={`workload-pulse ${script.status}`} /><div><strong>{script.filename}</strong><span>{argsText ? `${argsText} · ` : ''}{formatDate(script.created_at)}</span></div></div>
-    <div className="row-placement"><span>{nodeLabel(script.target_node, nodes)}</span></div>
-    <div className="row-progress"><span>{elapsed != null ? `${elapsed.toFixed(2)} s` : (script.status === 'running' ? 'Running...' : '-')}</span></div>
+  const { go } = useNavigation()
+  const args = script.args?.length ? script.args.join(' ') : ''
+  return <button type="button" className={`script-row ${selected ? 'selected' : ''}`.trim()} aria-current={selected ? 'true' : undefined} onClick={() => go('scripts', { scriptId: script.id })}>
+    <span className={`workload-pulse ${script.status}`} />
+    <span className="script-row-main">
+      <strong>{script.filename}{args && <em> {args}</em>}</strong>
+      <span>{nodeLabel(script.target_node, nodes)} · <time dateTime={script.created_at} title={new Date(script.created_at).toLocaleString()}>{formatRelative(script.created_at)}</time></span>
+    </span>
+    <span className="script-row-time">{formatElapsed(scriptDuration(script))}</span>
+    <span className="script-row-outcome">{scriptOutcome(script)}</span>
     <StatusBadge status={script.status} />
-    <div className="row-time">{script.exit_code == null ? (script.status === 'failed' ? 'Error' : script.status === 'running' ? 'Running' : 'Pending') : `Exit ${script.exit_code}`}</div>
   </button>
 }

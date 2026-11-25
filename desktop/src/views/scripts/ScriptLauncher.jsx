@@ -55,8 +55,8 @@ export function ScriptLauncher({ onClose }) {
     try {
       const script = await api.startScript({ filename: name, content, target_node: targetNode, args: args.trim() ? args.trim().split(/\s+/) : [] })
       onClose()
-      go('workloads', { scriptId: script.id })
-      notify(`${script.filename} is running. Output will appear below.`)
+      go('scripts', { scriptId: script.id })
+      notify(`${script.filename} started.`)
       await refresh()
     } catch (submitError) { setError(submitError.message) }
   }

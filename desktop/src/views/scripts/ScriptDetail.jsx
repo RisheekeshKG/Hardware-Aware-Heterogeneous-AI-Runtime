@@ -1,38 +1,59 @@
 import { useRuntime } from '../../app/RuntimeProvider.jsx'
-import { RefreshButton } from '../../components/RefreshButton.jsx'
 import { BackendBadge, StatusBadge } from '../../components/badges.jsx'
 import { Metric, Placement } from '../../components/metrics.jsx'
+import { useNow } from '../../hooks/useNow.js'
 import { useScriptStream } from '../../hooks/useScriptStream.js'
-import { backendLineLabel, targetMachine } from '../../lib/devices.js'
-import { formatBytes, formatDate, formatSecondsShort } from '../../lib/format.js'
-import { scriptTimings } from '../../lib/runs.js'
-import { IconButton } from '../../components/Button.jsx'
-import { CloseIcon } from '../../components/icons.jsx'
+import { backendTitle, nodeLabel, remoteNodes } from '../../lib/devices.js'
+import { formatBytes, formatDate, formatElapsed, formatSecondsShort } from '../../lib/format.js'
+import { isActive, scriptDuration, scriptOutcome, scriptTimings } from '../../lib/runs.js'
 
-export function ScriptDetail({ script, onClose }) {
-  const { devices, nodes, cpuInfo, refresh: onRefresh } = useRuntime()
+function targetBackends(script, devices, nodes) {
+  if (script.target_node === 'local') return { backends: (devices || []).filter((device) => device.available), status: 'online' }
+  const node = remoteNodes(nodes).find((item) => item.node_id === script.target_node)
+  return node ? { backends: (node.capabilities || []).filter((b) => b.available !== false), status: node.status } : { backends: [], status: 'unknown' }
+}
+
+export function ScriptDetail({ script }) {
+  const { devices, nodes, cpuInfo } = useRuntime()
   const { liveOutput } = useScriptStream(script.id)
+  const now = useNow(isActive(script.status))
   const output = liveOutput || script.output || ''
-  const hasOutput = Boolean(output && output.length)
-  const machine = targetMachine(script, devices, nodes)
-  const isLocal = script.target_node === 'local'
-  const machineCpuInfo = isLocal ? cpuInfo : null
-  return <section className="panel script-detail">
-    <div className="section-heading compact"><div><div className="eyebrow">SCRIPT DETAIL</div><h2>{script.filename}</h2></div><div className="script-detail-actions"><StatusBadge status={script.status} />{onRefresh && <RefreshButton onClick={onRefresh} title="Refresh this script" />}{onClose && <IconButton className="close-button" onClick={onClose} label="Close script detail" icon={<CloseIcon />} />}</div></div>
-    <div className="placement-grid">
-      <Placement label="Machine" value={machine?.name || '-'} />
-      <Placement label="Started" value={formatDate(script.created_at)} />
-      <Placement label="Total time" value={formatSecondsShort(scriptTimings(script).total)} />
-      <Placement label={scriptTimings(script).isRemote ? 'Transport' : 'Overhead'} value={formatSecondsShort(scriptTimings(script).transport)} accent={scriptTimings(script).isRemote ? 'transfer' : ''} />
+  const timings = scriptTimings(script)
+  const target = targetBackends(script, devices, nodes)
+  const running = isActive(script.status)
+  return <section className="panel script-detail" aria-label={`Run of ${script.filename}`}>
+    <div className="script-detail-head">
+      <div><div className="eyebrow">SCRIPT RUN · {script.id}</div><h2>{script.filename}</h2></div>
+      <div className="script-detail-actions"><StatusBadge status={script.status} /></div>
     </div>
-    {(() => {
-      const timings = scriptTimings(script)
-      return <div className="timings-block"><div className="timings-head"><span className="eyebrow">TIMING BREAKDOWN</span></div><div className="timings-grid"><Metric label="Queue wait" value={formatSecondsShort(timings.queue)} /><Metric label={timings.isRemote ? 'Remote execute' : 'Execute'} value={formatSecondsShort(timings.execute)} /><Metric label="Transport" value={formatSecondsShort(timings.transport)} /><Metric label="Total" value={formatSecondsShort(timings.total)} /></div><div className="policy-note"><span className="status-dot preview" /><span>{timings.isRemote ? 'Transport covers host↔worker HTTP + polling. Remote execute comes from the worker’s own clock.' : 'Local runs have near-zero transport. Overhead is queue + runtime setup.'}</span></div></div>
-    })()}
-    {machine && machine.backends.length ? <div className="hardware-block"><div className="hardware-head"><span className="eyebrow">HARDWARE AVAILABLE ON TARGET</span>{machine.status && machine.status !== 'online' ? <StatusBadge status={machine.status} /> : null}</div><div className="hardware-list">{machine.backends.filter((b) => b.available !== false).map((backend) => <div className="hardware-row" key={backend.backend}><BackendBadge backend={backend.backend} /><div><strong>{backendLineLabel(backend, machineCpuInfo)}</strong><span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free / ${formatBytes(backend.memory.total_bytes)}` : (backend.memory?.unavailable_reason || 'Memory unavailable')}</span></div></div>)}</div><div className="policy-note"><span className="status-dot preview" /><span>The script picks which of these to use at runtime. HAR shows every backend available on the target.</span></div></div> : null}
+    <div className="placement-grid">
+      <Placement label="Computer" value={nodeLabel(script.target_node, nodes)} />
+      <Placement label="Started" value={formatDate(script.started_at || script.created_at)} />
+      <Placement label={running ? 'Running for' : 'Took'} value={formatElapsed(scriptDuration(script, now))} />
+      <Placement label="Result" value={scriptOutcome(script)} />
+    </div>
     {script.args?.length ? <div className="script-args"><span className="eyebrow">ARGUMENTS</span><code>{script.args.join(' ')}</code></div> : null}
-    {script.error ? <div className="form-error" style={{ marginTop: 14 }}>{script.error}</div> : null}
-    <div className="script-output-head"><span className="eyebrow">OUTPUT (STDOUT + STDERR)</span><span>{hasOutput ? `${output.length} chars${script.status === 'running' ? ' — streaming' : ''}` : (script.status === 'running' ? 'Waiting for the script to produce output...' : 'No output')}</span></div>
-    <pre className="script-output">{hasOutput ? output : (script.status === 'running' ? 'Script is starting. Output will stream here as it is produced.' : (script.status === 'failed' ? (script.error || 'Script failed with no output.') : 'No output.'))}</pre>
+    {/* For a crash the error is the stderr tail, already in the output; show it only when it adds something (timeouts, disconnects). */}
+    {script.error && script.status !== 'completed' && !output.includes(script.error.trim().slice(-120)) ? <div className="form-error script-error">{script.error}</div> : null}
+    <div className="script-output-head"><span className="eyebrow">OUTPUT</span><span>{output ? `${output.length.toLocaleString()} chars${running ? ' · streaming' : ''}` : running ? 'Waiting for output…' : ''}</span></div>
+    <pre className="script-output">{output || (running ? 'The script has started. Anything it prints shows up here as it happens.' : 'This script printed nothing.')}</pre>
+    <details className="detail-section">
+      <summary><span className="eyebrow">TIMING</span><span>{formatSecondsShort(timings.total)} total</span></summary>
+      <div className="timings-grid">
+        <Metric label="Waiting to start" value={formatSecondsShort(timings.queue)} />
+        <Metric label={timings.isRemote ? 'Running there' : 'Running'} value={formatSecondsShort(timings.execute)} />
+        <Metric label="Network" value={timings.isRemote ? formatSecondsShort(timings.transport) : 'n/a'} />
+        <Metric label="Total" value={formatSecondsShort(timings.total)} />
+      </div>
+      <p className="detail-note">{timings.isRemote ? 'Network time is sending the script and collecting its output. "Running there" is measured by the other computer\'s own clock.' : 'Local runs have no network time; "waiting" is the queue plus starting Python.'}</p>
+    </details>
+    <details className="detail-section">
+      <summary><span className="eyebrow">HARDWARE ON THAT COMPUTER</span><span>{target.backends.length ? target.backends.map((b) => b.backend.toUpperCase()).join(' · ') : 'Unknown'}</span></summary>
+      {target.backends.length ? <div className="hardware-list">{target.backends.map((backend) => <div className="hardware-row" key={backend.backend}>
+        <BackendBadge backend={backend.backend} />
+        <div><strong>{backendTitle(backend, script.target_node === 'local' ? cpuInfo : null)}</strong><span>{backend.memory?.total_bytes != null ? `${formatBytes(backend.memory.available_bytes)} free of ${formatBytes(backend.memory.total_bytes)}` : (backend.memory?.unavailable_reason || 'Memory unknown')}</span></div>
+      </div>)}</div> : <p className="detail-note">That computer is no longer connected.</p>}
+      <p className="detail-note">The script chooses which of these to use; HAR doesn't pick for it.</p>
+    </details>
   </section>
 }

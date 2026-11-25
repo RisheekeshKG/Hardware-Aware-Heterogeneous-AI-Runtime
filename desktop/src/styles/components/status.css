@@ -8,11 +8,6 @@
   box-shadow: 0 0 11px var(--accent-glow);
 }
 
-.status-dot.preview {
-  background: var(--status-warning);
-  box-shadow: 0 0 11px var(--warning-glow);
-}
-
 .status-badge {
   display: inline-flex;
   align-items: center;
@@ -94,20 +89,6 @@
   background: var(--backend-transfer-bg);
 }
 
-.device-state {
-  margin-left: auto;
-  text-transform: uppercase;
-  font: 9px var(--font-mono);
-}
-
-.device-state.online {
-  color: var(--status-success);
-}
-
-.device-state.offline {
-  color: var(--status-offline);
-}
-
 .workload-pulse {
   width: 7px;
   height: 7px;
@@ -167,5 +148,20 @@
 
 .status-badge.unknown .status-dot {
   background: var(--status-offline);
+  box-shadow: none;
+}
+
+.status-dot.offline {
+  background: var(--status-offline);
+  box-shadow: none;
+}
+
+.status-badge.online {
+  color: var(--status-success);
+  background: var(--status-success-bg);
+}
+
+.status-badge.online .status-dot {
+  background: var(--status-success);
   box-shadow: none;
 }

@@ -16,3 +16,9 @@ export function desktopListen(event, handler) {
   const pending = listen(event, handler)
   return () => { pending.then((stop) => stop()) }
 }
+
+export async function appVersion() {
+  if (!isDesktop()) return null
+  const { getVersion } = await import('@tauri-apps/api/app')
+  return getVersion()
+}

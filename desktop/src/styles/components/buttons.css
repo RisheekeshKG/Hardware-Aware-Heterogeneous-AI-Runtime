@@ -81,15 +81,6 @@
   color: var(--accent);
 }
 
-.link-button {
-  padding: 0;
-  border: 0;
-  color: var(--backend-cpu);
-  background: none;
-  font-size: 11px;
-  cursor: pointer;
-}
-
 .section-refresh {
   border-color: var(--border-subtle);
   color: var(--text-dim);
@@ -157,4 +148,12 @@ button:focus-visible,
 .editor-load:focus-within {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.text-button.danger-text {
+  color: var(--status-error-muted);
+}
+
+.text-button.danger-text:hover {
+  color: var(--status-error);
 }

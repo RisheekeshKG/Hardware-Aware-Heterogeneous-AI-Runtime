@@ -37,6 +37,8 @@ export function RuntimeProvider({ children }) {
   const [status, setStatus] = useState('starting')
   const [error, setError] = useState('')
   const [cpuInfo, setCpuInfo] = useState({ brand: null, frequency_ghz: null })
+  // /api/system for this computer (hostname, OS, Python, PyTorch). Changes only on restart.
+  const [system, setSystem] = useState(null)
   const inFlight = useRef(null)
   const statusRef = useRef('starting')
   const sessionRef = useRef(null)
@@ -56,6 +58,7 @@ export function RuntimeProvider({ children }) {
           needSession ? api.session().catch(() => sessionRef.current) : sessionRef.current,
         ])
         sessionRef.current = session
+        if (needSession) api.system().then(setSystem).catch(() => {})
         let worker = { pairing: [], trustedHosts: [], workerConnection: null }
         if (session?.role === 'worker') {
           const [pairing, trustedHosts, workerConnection] = await Promise.all([
@@ -118,8 +121,8 @@ export function RuntimeProvider({ children }) {
   }, [])
 
   const value = useMemo(
-    () => ({ ...data, cpuInfo, status, error, loading: status === 'starting', refresh, expectRestart, dropPairing }),
-    [data, cpuInfo, status, error, refresh, expectRestart, dropPairing],
+    () => ({ ...data, cpuInfo, system, status, error, loading: status === 'starting', refresh, expectRestart, dropPairing }),
+    [data, cpuInfo, system, status, error, refresh, expectRestart, dropPairing],
   )
   return <RuntimeContext.Provider value={value}>{children}</RuntimeContext.Provider>
 }

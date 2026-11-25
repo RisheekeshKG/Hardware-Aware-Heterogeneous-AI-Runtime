@@ -7,17 +7,17 @@ import { Sidebar } from './app/Sidebar.jsx'
 import { ConnectionBanner, Topbar } from './app/Topbar.jsx'
 import { ToastProvider } from './app/ToastProvider.jsx'
 import { BenchmarksView } from './views/benchmarks/BenchmarksView.jsx'
-import { FabricView } from './views/devices/FabricView.jsx'
-import { RuntimeView } from './views/overview/RuntimeView.jsx'
-import { TracesView } from './views/scripts/TracesView.jsx'
-import { WorkloadsView } from './views/scripts/WorkloadsView.jsx'
+import { DevicesView } from './views/devices/DevicesView.jsx'
+import { OverviewView } from './views/overview/OverviewView.jsx'
+import { ScriptsView } from './views/scripts/ScriptsView.jsx'
+import { SettingsView } from './views/settings/SettingsView.jsx'
 import { SetupGate } from './views/setup/SetupGate.jsx'
 
 const pages = {
-  runtime: RuntimeView,
-  workloads: WorkloadsView,
-  fabric: FabricView,
-  traces: TracesView,
+  overview: OverviewView,
+  scripts: ScriptsView,
+  devices: DevicesView,
+  settings: SettingsView,
   benchmarks: BenchmarksView,
 }
 
@@ -39,7 +39,7 @@ export function App() {
 function Shell() {
   const { page } = useNavigation()
   const { pairing } = useRuntime()
-  const Page = pages[page] || RuntimeView
+  const Page = pages[page] || OverviewView
   return <div className="app-shell">
     <Sidebar />
     <main className="main-content">
