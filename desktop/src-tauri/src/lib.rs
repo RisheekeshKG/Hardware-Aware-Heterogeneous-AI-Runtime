@@ -24,8 +24,6 @@ static INSTALL_PROCESS: Mutex<Option<std::process::Child>> = Mutex::new(None);
 static INSTALL_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 /// Installed by uv on first launch. numpy isn't a torch dependency, but most user scripts import it.
-const PYTHON_PACKAGES: &[&str] = &["torch", "numpy"];
-
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -82,6 +80,15 @@ fn python_packages_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| error.to_string())
 }
 
+/// Downloaded PyTorch wheels, kept between installs so Repair/Reinstall don't download again.
+/// A torch .whl copied here from another computer is used instead of downloading.
+fn wheels_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("wheels"))
+        .map_err(|error| error.to_string())
+}
+
 /// The JSON line printed by `har-runtime-server setup-check`.
 #[derive(Deserialize)]
 struct SetupCheck {
@@ -128,6 +135,8 @@ struct RuntimeStatus {
     /// Why torch didn't import, e.g. "No module named 'torch'" before first-launch setup.
     torch_error: Option<String>,
     installing: bool,
+    /// Where downloaded wheels are kept (shown in Settings so they can be copied to another PC).
+    wheels_dir: Option<String>,
 }
 
 fn current_status(app: &AppHandle) -> RuntimeStatus {
@@ -147,6 +156,7 @@ fn current_status(app: &AppHandle) -> RuntimeStatus {
         torch_version,
         torch_error,
         installing: INSTALLING_TORCH.load(Ordering::SeqCst),
+        wheels_dir: wheels_dir(app).ok().map(|dir| dir.display().to_string()),
     }
 }
 
@@ -175,14 +185,22 @@ fn install_torch_blocking(app: &AppHandle) -> Result<(), String> {
         std::fs::remove_dir_all(&staging).map_err(|error| error.to_string())?;
     }
 
-    let mut command = std::process::Command::new(&uv);
+    let cache = wheels_dir(app)?;
+
+    // `install-torch` (har/runtime/torch_install.py) has uv resolve the right build for this
+    // computer, downloads the big wheel itself in parallel, resumable pieces into `cache`, then
+    // runs uv to install from it. Packages must match the runtime's own Python; uv downloads
+    // that Python version to resolve against if the computer has none.
+    let mut command = std::process::Command::new(runtime_path(app));
     command
-        .args(["pip", "install", "--target"])
+        .arg("install-torch")
+        .arg("--target")
         .arg(&staging)
-        // Packages must match the runtime's own Python. uv needs an interpreter to resolve them
-        // and downloads that Python version if the computer has none.
-        .args(["--python", &python_version, "--torch-backend", "auto"])
-        .args(PYTHON_PACKAGES)
+        .arg("--uv")
+        .arg(&uv)
+        .arg("--cache")
+        .arg(&cache)
+        .args(["--python-version", &python_version])
         .env("UV_PYTHON_DOWNLOADS", "automatic")
         .env("UV_NO_CONFIG", "1")
         .env("NO_COLOR", "1")
@@ -194,9 +212,15 @@ fn install_torch_blocking(app: &AppHandle) -> Result<(), String> {
         use std::os::windows::process::CommandExt;
         command.creation_flags(CREATE_NO_WINDOW);
     }
+    // Own process group, so Cancel can stop the installer and the uv it starts together.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
     let mut child = command
         .spawn()
-        .map_err(|error| format!("could not start uv: {error}"))?;
+        .map_err(|error| format!("could not start the PyTorch installer: {error}"))?;
 
     let recent = Arc::new(Mutex::new(VecDeque::new()));
     let streams: Vec<Box<dyn Read + Send>> = [
@@ -255,7 +279,7 @@ fn install_torch_blocking(app: &AppHandle) -> Result<(), String> {
     if !status.is_some_and(|status| status.success()) {
         let _ = std::fs::remove_dir_all(&staging);
         if INSTALL_CANCELLED.swap(false, Ordering::SeqCst) {
-            return Err("Install cancelled. Downloads that finished are kept, so trying again picks up from there.".to_string());
+            return Err("Install cancelled. The download is kept, so trying again continues where it stopped.".to_string());
         }
         let detail = recent
             .lock()
@@ -302,9 +326,31 @@ fn cancel_torch_install() -> Result<(), String> {
     let mut slot = INSTALL_PROCESS.lock().map_err(|error| error.to_string())?;
     if let Some(child) = slot.as_mut() {
         INSTALL_CANCELLED.store(true, Ordering::SeqCst);
-        child.kill().map_err(|error| error.to_string())?;
+        kill_tree(child);
     }
     Ok(())
+}
+
+/// Stops the installer and whatever it started (uv). Killing only the parent would leave uv
+/// running and holding the staging folder.
+fn kill_tree(child: &mut std::process::Child) {
+    let pid = child.id().to_string();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid])
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+    #[cfg(unix)]
+    {
+        // The installer leads its own process group (process_group(0) at spawn).
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .status();
+    }
+    let _ = child.kill();
 }
 
 fn stop_services(app: &AppHandle) {

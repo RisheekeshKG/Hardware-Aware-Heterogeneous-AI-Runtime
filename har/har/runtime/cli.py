@@ -63,6 +63,30 @@ def run_script(
         _sys.argv = previous_argv
 
 
+@app.command("install-torch")
+def install_torch(
+    target: Path = typer.Option(..., help="Folder to install PyTorch into"),
+    uv: str = typer.Option(..., help="Path to the uv executable"),
+    cache: Path = typer.Option(..., help="Folder that keeps downloaded wheels between installs"),
+    python_version: Optional[str] = typer.Option(None, help="Python version to install for (default: this one)"),
+) -> None:
+    """Install PyTorch for the desktop app; the big wheel downloads in parallel, resumable pieces."""
+
+    import sys
+
+    import httpx
+
+    from .torch_install import install
+
+    version = python_version or f"{sys.version_info.major}.{sys.version_info.minor}"
+    try:
+        code = install(target, [uv], cache, version)
+    except (RuntimeError, httpx.HTTPError, OSError) as error:
+        typer.echo(f"error: {error}")
+        code = 1
+    raise typer.Exit(code)
+
+
 @app.command("setup-check")
 def setup_check() -> None:
     """Print one JSON line saying whether PyTorch is importable. Used by the desktop shell."""

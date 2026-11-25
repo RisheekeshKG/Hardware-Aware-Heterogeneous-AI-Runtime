@@ -131,7 +131,7 @@ function PyTorchPanel() {
 
   return <Pane title="PYTORCH" meta={state} actions={isDesktop() && !install.installing ? <Button variant={missing || broken ? 'primary' : 'secondary'} onClick={reinstall} disabled={!status}>{missing ? 'Install PyTorch' : broken ? 'Repair PyTorch' : 'Reinstall'}</Button> : null}>
     <p className="detail-note">{isDesktop()
-      ? 'HAR keeps its own copy of PyTorch, separate from any Python on this computer. Reinstalling fetches the newest build for this hardware.'
+      ? <>HAR keeps its own copy of PyTorch, separate from any Python on this computer. Reinstalling fetches the newest build for this hardware.{status?.wheels_dir && <><br />Downloads are kept in <code>{status.wheels_dir}</code>. To skip the 2.8 GB CUDA download on another Windows PC, copy the <code>torch-…whl</code> file from here into the same folder there before installing.</>}</>
       : <>Install or repair PyTorch from the HAR desktop app. This browser is talking to <code>har serve</code>, which uses whatever PyTorch its Python has.</>}</p>
     {broken && <div className="form-error setup-error">{status.torch_error}</div>}
     {status?.check_error && <div className="form-error setup-error">{status.check_error}</div>}

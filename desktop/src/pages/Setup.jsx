@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { desktopInvoke, desktopListen, isDesktop } from '../api.js'
 import { useNow, useToast } from '../state.jsx'
 import { ArrowRightIcon, Brand, Button } from '../ui.jsx'
+import { formatElapsed } from '../helpers.js'
 
 // Shows the first-launch screens (starting, runtime missing, install PyTorch) until the
 // runtime is usable, then renders the app. In a plain browser there is nothing to check.
@@ -48,7 +49,7 @@ function SetupScreen({ status, onFinish }) {
   const run = async () => { const result = await install.install(); if (result) onFinish(result) }
   return <SetupCard eyebrow="ONE-TIME SETUP" title={broken ? 'Repair PyTorch' : 'Install PyTorch'}>
     <p>{broken ? "PyTorch is installed but failed to load, so HAR can't run work yet. Reinstalling usually fixes it." : "HAR runs your code with PyTorch. It isn't bundled with the app, so HAR installs it once into its own folder. This step needs an internet connection; after that HAR works offline."}</p>
-    <div className="setup-detail"><span>Download</span><strong>About 150 MB on a Mac. On Windows with an NVIDIA GPU, about 3 GB (the CUDA build).</strong></div>
+    <div className="setup-detail"><span>Download</span><strong>About 150 MB on a Mac. On Windows with an NVIDIA GPU, about 2.8 GB (the CUDA build), fetched in parallel pieces; if it stops, it continues where it left off.</strong></div>
     {broken && <div className="setup-detail"><span>Load error</span><strong>{status.torch_error}</strong></div>}
     <TorchInstallProgress install={install} />
     {install.error && <div className="form-error setup-error">{install.error}</div>}
@@ -86,11 +87,21 @@ export function useTorchInstall({ onRestarting } = {}) {
     setLastLineAt(Date.now())
   }), [])
 
-  // uv prints "Resolved N packages", then "Prepared N packages" once downloads finish,
-  // then "Installed N packages".
+  // Lines from `har-runtime-server install-torch` (torch_install.py), in order:
+  // "Resolving…", "Downloading torch …: 812 MB of 2.75 GB (30%) · 9.4 MB/s · about 3 min left"
+  // (or "Using … from the download cache"), "Checking torch…", "Installing…", then uv's
+  // "Installed N packages" just before the app restarts the runtime.
   const seen = (prefix) => lines.some((line) => line.startsWith(prefix))
   const installed = seen('Installed')
-  const phase = installed ? 'Restarting HAR…' : seen('Prepared') ? 'Installing…' : seen('Resolved') ? 'Downloading PyTorch…' : 'Preparing…'
+  const lastDownload = [...lines].reverse().find((line) => line.startsWith('Downloading '))
+  const percent = lastDownload ? Number(lastDownload.match(/\((\d+)%\)/)?.[1]) : null
+  const phase = installed ? 'Restarting HAR…'
+    : seen('Installing') ? 'Installing…'
+    : seen('Checking') ? 'Checking the download…'
+    : lastDownload ? `Downloading PyTorch · ${percent ?? 0}%`
+    : seen('Using') ? 'Using the downloaded copy…'
+    : 'Finding the right PyTorch build…'
+  const downloading = Boolean(lastDownload) && !seen('Checking') && !seen('Installing')
 
   useEffect(() => {
     if (installing && installed && !announced.current) {
@@ -117,6 +128,7 @@ export function useTorchInstall({ onRestarting } = {}) {
   return {
     installing,
     phase,
+    percent: downloading && Number.isFinite(percent) ? percent : null,
     error,
     lastLine: lines[lines.length - 1] || '',
     elapsed: installing ? Math.max(0, Math.round((now - startedAt) / 1000)) : 0,
@@ -129,9 +141,11 @@ export function useTorchInstall({ onRestarting } = {}) {
 export function TorchInstallProgress({ install }) {
   if (!install.installing) return null
   return <div className="setup-progress" role="progressbar" aria-busy="true" aria-label="Installing PyTorch">
-    <div className="setup-progress-track"><div className="setup-progress-fill indeterminate" /></div>
-    <div className="setup-progress-meta"><span>{install.phase}</span><strong>{install.elapsed}s</strong></div>
+    <div className="setup-progress-track">{install.percent != null
+      ? <div className="setup-progress-fill" style={{ width: `${install.percent}%` }} />
+      : <div className="setup-progress-fill indeterminate" />}</div>
+    <div className="setup-progress-meta"><span>{install.phase}</span><strong>{formatElapsed(install.elapsed)}</strong></div>
     {install.lastLine && <div className="setup-log">{install.lastLine}</div>}
-    {install.stalled && <div className="setup-hint">Big downloads can take a few minutes. If this stays stuck, cancel and try again; finished downloads are kept.</div>}
+    {install.stalled && <div className="setup-hint">This step is taking a while. If it stays stuck, cancel and try again; anything already downloaded is kept.</div>}
   </div>
 }
