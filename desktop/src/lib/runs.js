@@ -1,3 +1,6 @@
+export const ACTIVE_STATUSES = ['queued', 'running']
+export const isActive = (status) => ACTIVE_STATUSES.includes(status)
+
 export function scriptElapsed(script) {
   if (!script.created_at || !script.updated_at) return null
   const seconds = (new Date(script.updated_at) - new Date(script.created_at)) / 1000

@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { Brand } from '../../app/Sidebar.jsx'
+import { desktopInvoke, desktopListen } from '../../lib/tauri.js'
 
-export function RuntimeSetup({ status, onInstalled, onSkip }) {
+// onFinish(status) after a successful install, onFinish(null) when the person skips.
+export function RuntimeSetup({ status, onFinish }) {
   const [installing, setInstalling] = useState(false)
   const [lines, setLines] = useState([])
   const [error, setError] = useState('')
@@ -10,9 +11,7 @@ export function RuntimeSetup({ status, onInstalled, onSkip }) {
   const [lastLineAt, setLastLineAt] = useState(0)
   const [now, setNow] = useState(Date.now())
   useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return undefined
-    const unlisten = listen('torch-install-log', (event) => { setLines((current) => [...current.slice(-49), event.payload.line]); setLastLineAt(Date.now()) })
-    return () => { unlisten.then((stop) => stop()) }
+    return desktopListen('torch-install-log', (event) => { setLines((current) => [...current.slice(-49), event.payload.line]); setLastLineAt(Date.now()) })
   }, [])
   useEffect(() => {
     if (!installing) return undefined
@@ -20,13 +19,13 @@ export function RuntimeSetup({ status, onInstalled, onSkip }) {
     return () => window.clearInterval(tick)
   }, [installing])
 
-  const brand = <div className="brand"><div className="brand-mark">H</div><div><strong>HAR</strong><span>runtime console</span></div></div>
+  const brand = <Brand />
   if (status.checking) return <div className="runtime-setup"><div className="runtime-setup-card">{brand}<div className="eyebrow">STARTING</div><h1>Starting HAR</h1></div></div>
   if (!status.installed) return <div className="runtime-setup"><div className="runtime-setup-card">{brand}<div className="eyebrow">INSTALL PROBLEM</div><h1>HAR's runtime is missing</h1><p>This copy of HAR doesn't include its compute runtime, so it can't start. Reinstall HAR from the latest installer.</p>{status.error && <div className="form-error">{status.error}</div>}</div></div>
 
   const install = async () => {
     setInstalling(true); setError(''); setLines([]); setInstallStartedAt(Date.now()); setLastLineAt(Date.now()); setNow(Date.now())
-    try { onInstalled(await invoke('install_torch')) } catch (installError) { setError(installError.toString()) } finally { setInstalling(false) }
+    try { onFinish(await desktopInvoke('install_torch')) } catch (installError) { setError(installError.toString()) } finally { setInstalling(false) }
   }
   // uv prints "Resolved N packages", then "Prepared N packages" once downloads finish, then "Installed N packages".
   const seen = (prefix) => lines.some((line) => line.startsWith(prefix))
@@ -41,6 +40,6 @@ export function RuntimeSetup({ status, onInstalled, onSkip }) {
     {installing && <div className="setup-progress" role="progressbar" aria-busy="true" aria-label="Installing PyTorch"><div className="setup-progress-track"><div className="setup-progress-fill indeterminate" /></div><div className="setup-progress-meta"><span>{phase}</span><strong>{Math.max(0, Math.round((now - installStartedAt) / 1000))}s</strong></div>{lines.length > 0 && <div className="setup-log">{lines[lines.length - 1]}</div>}{now - lastLineAt > 90000 && <div className="setup-hint">Big downloads can take a few minutes. If this stays stuck, cancel and try again; finished downloads are kept.</div>}</div>}
     {error && <div className="form-error setup-error">{error}</div>}
     <button className="primary-button setup-button" onClick={install} disabled={installing}>{installing ? 'Installing PyTorch...' : error ? 'Try again' : broken ? 'Reinstall PyTorch' : 'Install PyTorch'}<span>-&gt;</span></button>
-    {installing ? <button className="text-button setup-skip" onClick={() => invoke('cancel_torch_install').catch(() => {})}>Cancel</button> : <button className="text-button setup-skip" onClick={onSkip}>Skip for now</button>}
+    {installing ? <button className="text-button setup-skip" onClick={() => desktopInvoke('cancel_torch_install').catch(() => {})}>Cancel</button> : <button className="text-button setup-skip" onClick={() => onFinish(null)}>Skip for now</button>}
   </div></div>
 }

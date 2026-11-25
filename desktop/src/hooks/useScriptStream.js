@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { API } from '../api/client.js'
+import { api } from '../api/endpoints.js'
 
 export function useScriptStream(scriptId) {
   // Live tail of /api/scripts/{id}/stream via EventSource. Each chunk is appended as it arrives,
@@ -12,7 +12,7 @@ export function useScriptStream(scriptId) {
     setChunks([])
     if (!scriptId) return undefined
     let closed = false
-    const es = new EventSource(`${API}/api/scripts/${scriptId}/stream`)
+    const es = new EventSource(api.scriptStreamUrl(scriptId, -1))
     es.onmessage = (event) => {
       try {
         const chunk = JSON.parse(event.data)

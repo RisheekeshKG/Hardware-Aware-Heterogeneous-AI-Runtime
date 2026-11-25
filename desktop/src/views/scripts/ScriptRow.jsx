@@ -1,9 +1,14 @@
+import { useNavigation } from '../../app/NavigationProvider.jsx'
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
 import { StatusBadge } from '../../components/badges.jsx'
 import { nodeLabel } from '../../lib/devices.js'
 import { formatDate } from '../../lib/format.js'
 import { scriptElapsed } from '../../lib/runs.js'
 
-export function ScriptRow({ script, active, onClick, nodes }) {
+export function ScriptRow({ script, active }) {
+  const { nodes } = useRuntime()
+  const { selectScript } = useNavigation()
+  const onClick = () => selectScript(active ? null : script.id)
   const elapsed = scriptElapsed(script)
   const argsText = script.args?.length ? script.args.join(' ') : ''
   return <button type="button" className={`workload-row script-row ${active ? 'active' : ''}`} onClick={onClick}>

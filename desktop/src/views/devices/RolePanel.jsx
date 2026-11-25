@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { invoke } from '@tauri-apps/api/core'
-import { API } from '../../api/client.js'
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
+import { desktopInvoke, isDesktop } from '../../lib/tauri.js'
 
 export const roleOptions = [
   { id: 'host', label: 'Host', detail: 'Send tasks to this computer and to devices you add.' },
@@ -9,23 +9,21 @@ export const roleOptions = [
 ]
 
 export function RolePanel() {
+  const { session, expectRestart } = useRuntime()
   const [role, setRole] = useState(null)
-  const [hostUrl, setHostUrl] = useState('')
   const [switching, setSwitching] = useState(false)
   const [error, setError] = useState('')
+  const hostUrl = session?.host_url || ''
   useEffect(() => {
-    if (!window.__TAURI_INTERNALS__) return
-    invoke('runtime_role').then(setRole).catch(() => {})
+    desktopInvoke('runtime_role').then(setRole).catch(() => {})
   }, [])
-  useEffect(() => {
-    if (!role) return
-    fetch(`${API}/api/session`).then((response) => response.ok ? response.json() : {}).then((data) => setHostUrl(data.host_url || '')).catch(() => {})
-  }, [role])
-  if (!window.__TAURI_INTERNALS__ || !role) return null
+  if (!isDesktop() || !role) return null
   const change = async (next) => {
     if (next === role) return
     setSwitching(true); setError('')
-    try { setRole(await invoke('set_runtime_role', { role: next })) } catch (roleError) { setError(roleError.toString()) } finally { setSwitching(false) }
+    // Switching restarts the runtime; don't flash "can't connect" while it boots.
+    expectRestart()
+    try { setRole(await desktopInvoke('set_runtime_role', { role: next })) } catch (roleError) { setError(roleError.toString()) } finally { setSwitching(false) }
   }
   // The worker service listens on port 9000 on the same LAN address the host API advertises.
   const workerAddress = hostUrl ? hostUrl.replace(/:\d+$/, ':9000') : ''

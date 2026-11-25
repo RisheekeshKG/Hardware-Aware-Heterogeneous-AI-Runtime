@@ -2,7 +2,12 @@ import { useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import { python } from '@codemirror/lang-python'
 import { oneDark } from '@codemirror/theme-one-dark'
+import { api } from '../../api/endpoints.js'
+import { useNavigation } from '../../app/NavigationProvider.jsx'
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
+import { useToast } from '../../app/ToastProvider.jsx'
 import { Dropdown } from '../../components/Dropdown.jsx'
+import { computerOptions } from '../../lib/devices.js'
 
 export const DEFAULT_SCRIPT = `import har
 import torch
@@ -19,7 +24,10 @@ result = big_matmul(2048)
 print("result shape:", tuple(result.shape))
 `
 
-export function ScriptLauncher({ nodes, onClose, onSubmit }) {
+export function ScriptLauncher({ onClose }) {
+  const { nodes, refresh } = useRuntime()
+  const { go } = useNavigation()
+  const notify = useToast()
   const [filename, setFilename] = useState('untitled.py')
   const [content, setContent] = useState(DEFAULT_SCRIPT)
   const [targetNode, setTargetNode] = useState('local')
@@ -41,12 +49,15 @@ export function ScriptLauncher({ nodes, onClose, onSubmit }) {
     if (!name.toLowerCase().endsWith('.py')) { setError('Filename must end with .py.'); return }
     if (!content.trim()) { setError('Write some code first.'); return }
     try {
-      await onSubmit({ filename: name, content, target_node: targetNode, args: args.trim() ? args.trim().split(/\s+/) : [] })
+      const script = await api.startScript({ filename: name, content, target_node: targetNode, args: args.trim() ? args.trim().split(/\s+/) : [] })
+      onClose()
+      go('workloads', { scriptId: script.id })
+      notify(`${script.filename} is running. Output will appear below.`)
+      await refresh()
     } catch (submitError) { setError(submitError.message) }
   }
 
   const lineCount = content.split('\n').length
-  const remoteNodes = nodes.filter((node) => node.name !== 'This device')
 
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="launcher-modal editor-modal" onSubmit={submit}>
     <div className="modal-header"><div><div className="eyebrow">NEW SCRIPT</div><h2>Write Python</h2></div><button type="button" className="close-button" onClick={onClose}>X</button></div>
@@ -66,7 +77,7 @@ export function ScriptLauncher({ nodes, onClose, onSubmit }) {
         basicSetup={{ lineNumbers: true, highlightActiveLine: true, foldGutter: false, autocompletion: true, bracketMatching: true, indentOnInput: true, highlightSelectionMatches: true }}
       />
     </div>
-    <label>Computer<Dropdown ariaLabel="Target computer" value={targetNode} onChange={setTargetNode} options={[{ value: 'local', label: 'This computer' }, ...remoteNodes.map((node) => ({ value: node.node_id, label: node.name, disabled: node.status !== 'online', hint: node.status === 'online' ? null : 'not available' }))]} /></label>
+    <label>Computer<Dropdown ariaLabel="Target computer" value={targetNode} onChange={setTargetNode} options={computerOptions(nodes)} /></label>
     <label>Arguments <span className="optional">OPTIONAL</span><input value={args} onChange={(event) => setArgs(event.target.value)} placeholder="--input data.csv" /></label>
     <div className="advanced-note">The script runs with the Python packages already installed on the selected computer. @har.offload-decorated functions get routed by HAR; everything else runs in-process as usual.</div>
     {error && <div className="form-error">{error}</div>}

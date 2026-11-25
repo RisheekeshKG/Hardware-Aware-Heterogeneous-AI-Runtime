@@ -1,3 +1,34 @@
+// A host can see a stale registration of its own worker from an older launch under this
+// name. It is never "another computer", so every remote-node list filters it out here.
+const THIS_DEVICE = 'This device'
+
+export const remoteNodes = (nodes) => (nodes || []).filter((node) => node.name !== THIS_DEVICE)
+
+const availableCapabilities = (node) => (node.capabilities || []).filter((capability) => capability.available !== false)
+
+// One place for "how many machines / runtimes are ready" (was computed four different ways).
+export function machineSummary(devices, nodes) {
+  const localAvailable = (devices || []).filter((device) => device.available)
+  const remote = remoteNodes(nodes)
+  const onlineRemote = remote.filter((node) => node.status === 'online')
+  return {
+    localAvailable,
+    remote,
+    onlineRemote,
+    machineCount: (localAvailable.length ? 1 : 0) + remote.length,
+    machinesReady: (localAvailable.length ? 1 : 0) + onlineRemote.length,
+    runtimesReady: localAvailable.length + onlineRemote.reduce((sum, node) => sum + availableCapabilities(node).length, 0),
+  }
+}
+
+// Options for a "which computer?" dropdown: this one first, offline ones disabled.
+export const computerOptions = (nodes) => [
+  { value: 'local', label: 'This computer' },
+  ...remoteNodes(nodes).map((node) => ({ value: node.node_id, label: node.name, disabled: node.status !== 'online', hint: node.status === 'online' ? null : 'not available' })),
+]
+
+export const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`
+
 export function backendsForTarget(targetNode, devices, nodes) {
   if (targetNode === 'local') return (devices || []).filter((device) => device.available)
   const node = (nodes || []).find((item) => item.node_id === targetNode)

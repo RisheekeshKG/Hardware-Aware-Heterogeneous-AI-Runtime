@@ -1,5 +1,17 @@
-export function TrustedHostsPanel({ hosts, onRevoke }) {
+import { api } from '../../api/endpoints.js'
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
+import { useAction } from '../../hooks/useAction.js'
+
+export function TrustedHostsPanel() {
+  const { trustedHosts: hosts } = useRuntime()
+  const action = useAction()
   if (!hosts || hosts.length === 0) return null
+  const onRevoke = (ip) => action({
+    confirm: `Revoke trust for ${ip}? HAR will refuse future jobs from this host.`,
+    run: () => api.revokeTrustedHost(ip),
+    success: `${ip} is no longer trusted.`,
+    failure: 'Could not revoke',
+  })
   return <section className="panel trusted-hosts-panel">
     <div className="section-heading compact">
       <div><div className="eyebrow">HOSTS CONNECTED TO THIS COMPUTER</div><h2>{hosts.length} host{hosts.length === 1 ? '' : 's'} can send tasks here</h2></div>

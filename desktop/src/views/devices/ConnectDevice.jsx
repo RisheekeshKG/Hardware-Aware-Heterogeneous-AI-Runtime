@@ -1,7 +1,12 @@
-import { useState, useEffect } from 'react'
-import { API } from '../../api/client.js'
+import { useCallback, useEffect, useState } from 'react'
+import { api } from '../../api/endpoints.js'
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
+import { useToast } from '../../app/ToastProvider.jsx'
 
-export function ConnectDevice({ onClose, onConnected }) {
+export function ConnectDevice({ onClose }) {
+  const { refresh } = useRuntime()
+  const notify = useToast()
+  const onConnected = async () => { onClose(); notify('Device connection requested.'); await refresh() }
   const [workerUrl, setWorkerUrl] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
@@ -10,24 +15,20 @@ export function ConnectDevice({ onClose, onConnected }) {
   const [scanning, setScanning] = useState(false)
   const [scannedOnce, setScannedOnce] = useState(false)
 
-  const scan = async () => {
+  const scan = useCallback(async () => {
     setScanning(true); setError('')
     try {
-      const response = await fetch(`${API}/api/discovery`)
-      if (!response.ok) throw new Error('Could not scan the network')
-      setDiscovered(await response.json())
+      setDiscovered(await api.discovery())
       setScannedOnce(true)
-    } catch (scanError) { setError(scanError.message) } finally { setScanning(false) }
-  }
+    } catch (scanError) { setError(`Could not scan the network: ${scanError.message}`) } finally { setScanning(false) }
+  }, [])
 
-  useEffect(() => { scan() }, [])
+  useEffect(() => { scan() }, [scan])
 
   const connectDiscovered = async (node) => {
     setWaiting(true); setError('')
     try {
-      const response = await fetch(`${API}/api/discovery/connect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ node_id: node.node_id, name: name.trim() || node.name || null }) })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.detail || 'Could not connect this device')
+      await api.connectDiscovered({ node_id: node.node_id, name: name.trim() || node.name || null })
       await onConnected()
     } catch (connectError) { setError(connectError.message) } finally { setWaiting(false) }
   }
@@ -37,9 +38,7 @@ export function ConnectDevice({ onClose, onConnected }) {
     if (!workerUrl.trim()) { setError("Scan the network above, or type an address."); return }
     setWaiting(true)
     try {
-      const response = await fetch(`${API}/api/nodes/connect`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worker_url: workerUrl.trim(), name: name.trim() || null }) })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || 'Could not connect this device')
+      await api.connectNode({ worker_url: workerUrl.trim(), name: name.trim() || null })
       await onConnected()
     } catch (connectError) { setError(connectError.message) } finally { setWaiting(false) }
   }

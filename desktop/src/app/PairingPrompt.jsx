@@ -1,16 +1,20 @@
 import { useState } from 'react'
-import { API } from '../api/client.js'
+import { api } from '../api/endpoints.js'
+import { useRuntime } from './RuntimeProvider.jsx'
+import { useToast } from './ToastProvider.jsx'
 
-export function PairingPrompt({ request, onDecided }) {
+export function PairingPrompt({ request }) {
+  const { dropPairing, refresh } = useRuntime()
+  const notify = useToast()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const decide = async (decision) => {
     setBusy(true); setError('')
     try {
-      const response = await fetch(`${API}/api/pairing/${request.id}/${decision}`, { method: 'POST' })
-      const data = await response.json()
-      if (!response.ok) throw new Error(data.detail || 'Could not answer the request')
-      onDecided(decision)
+      await api.decidePairing(request.id, decision)
+      dropPairing(request.id)
+      notify(decision === 'accept' ? 'Connection accepted. This computer will now take tasks from that host.' : 'Connection declined.')
+      refresh()
     } catch (decideError) { setError(decideError.message); setBusy(false) }
   }
   const host = (() => { try { return new URL(request.coordinator).hostname } catch { return request.client_ip } })()

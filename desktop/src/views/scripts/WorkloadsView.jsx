@@ -1,9 +1,14 @@
+import { useNavigation } from '../../app/NavigationProvider.jsx'
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
 import { EmptyState } from '../../components/EmptyState.jsx'
 import { PageHeader } from '../../components/PageHeader.jsx'
 import { ScriptDetail } from './ScriptDetail.jsx'
 import { ScriptRow } from './ScriptRow.jsx'
 
-export function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScriptLaunch, devices, nodes, cpuInfo, onRefresh }) {
+export function WorkloadsView() {
+  const { scripts } = useRuntime()
+  const { scriptId: selectedScriptId, selectScript: onSelectScript, openModal } = useNavigation()
+  const onScriptLaunch = () => openModal('script')
   const selectedScript = scripts.find((script) => script.id === selectedScriptId) || null
   return <>
     <PageHeader eyebrow="SCRIPTS" title="Run Python" description="Write a Python script, pick a device, see what it printed and whether it finished cleanly." action={<button className="primary-button" onClick={onScriptLaunch}><span>+</span> New script</button>} />
@@ -16,8 +21,8 @@ export function WorkloadsView({ scripts, selectedScriptId, onSelectScript, onScr
     </section>
     <section className="section-block">
       <div className="section-heading"><div><div className="eyebrow">SCRIPT HISTORY</div><h2>Your Python runs</h2></div>{scripts.length ? <span className="chart-meta">{scripts.length} run{scripts.length === 1 ? '' : 's'}</span> : null}</div>
-      {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} nodes={nodes} active={script.id === selectedScriptId} onClick={() => onSelectScript(script.id === selectedScriptId ? null : script.id)} />)}</div> : <EmptyState title="No Python runs yet" detail="Write a script to see output and status here." action="New script" onAction={onScriptLaunch} />}
-      {selectedScript && <ScriptDetail script={selectedScript} onClose={() => onSelectScript(null)} onRefresh={onRefresh} devices={devices} nodes={nodes} cpuInfo={cpuInfo} />}
+      {scripts.length ? <div className="workload-list">{scripts.map((script) => <ScriptRow key={script.id} script={script} active={script.id === selectedScriptId} />)}</div> : <EmptyState title="No Python runs yet" detail="Write a script to see output and status here." action="New script" onAction={onScriptLaunch} />}
+      {selectedScript && <ScriptDetail script={selectedScript} onClose={() => onSelectScript(null)} />}
     </section>
   </>
 }

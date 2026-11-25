@@ -1,3 +1,4 @@
+import { useRuntime } from '../../app/RuntimeProvider.jsx'
 import { RefreshButton } from '../../components/RefreshButton.jsx'
 import { BackendBadge, StatusBadge } from '../../components/badges.jsx'
 import { Metric, Placement } from '../../components/metrics.jsx'
@@ -6,7 +7,8 @@ import { backendLineLabel, targetMachine } from '../../lib/devices.js'
 import { formatBytes, formatDate, formatSecondsShort } from '../../lib/format.js'
 import { scriptTimings } from '../../lib/runs.js'
 
-export function ScriptDetail({ script, onClose, onRefresh, devices, nodes, cpuInfo }) {
+export function ScriptDetail({ script, onClose }) {
+  const { devices, nodes, cpuInfo, refresh: onRefresh } = useRuntime()
   const { liveOutput } = useScriptStream(script.id)
   const output = liveOutput || script.output || ''
   const hasOutput = Boolean(output && output.length)
