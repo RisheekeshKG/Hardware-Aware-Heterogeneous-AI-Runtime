@@ -10,10 +10,6 @@ dist/
 *.spec
 !har/har-runtime-server.spec
 
-# PyInstaller sidecar binaries baked into the Tauri app at build time. These are
-# ~500 MB each and should never land in git — only the running binary needs them.
-desktop/src-tauri/binaries/har-runtime-*
-
 # Tauri shell build artefacts — never tracked.
 desktop/src-tauri/target/
 desktop/src-tauri/runtime/har-runtime-server/

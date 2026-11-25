@@ -47,16 +47,29 @@ First launch shows a setup screen until PyTorch is installed (or skipped).
 
 ## Code layout
 
+Twelve source files and two stylesheets. Each screen lives in one file under `pages/`.
+
 ```
 desktop/src/
-  main.jsx, App.jsx   mount; setup gate → providers → shell → page + modal host
-  app/                RuntimeProvider (the poll), Navigation, Toast, Confirm, Sidebar, Topbar
-  api/                client.js (request, ApiError), endpoints.js (every endpoint)
-  lib/                devices.js (wording, computers), runs.js (statuses, labels), format.js, tauri.js
-  hooks/              useScriptStream, useStopScript, useAction, useNow
-  components/         Button, IconButton, Modal, ConfirmDialog, Field, MemoryBar, ScriptOutput, icons…
-  views/              overview/, scripts/, devices/, settings/, benchmarks/, setup/
-  styles/             index.css imports tokens → base → panel → layout → components → views
+  main.jsx          starts the app (fonts, styles, <App />)
+  App.jsx           the window: first-launch setup, sidebar, top bar, the open page, dialogs
+  state.jsx         shared state: live runtime data (one poll every 3 s), open page, toasts, confirm
+  api.js            every call HAR makes: HTTP to the runtime, desktop-app (Tauri) commands
+  helpers.js        formatting and labels: sizes, times, "Apple GPU · MPS", run statuses
+  ui.jsx            shared pieces: buttons, dialogs, fields, badges, icons, dropdown
+  pages/
+    Overview.jsx    what's running, your computers, recent scripts
+    Scripts.jsx     history, run detail, live output, Stop, new-script editor
+    Devices.jsx     computer cards, detail page, add device, worker connection
+    Settings.jsx    role, PyTorch, about
+    Benchmarks.jsx  built-in workloads (dev tool)
+    Setup.jsx       first launch: install PyTorch (installer shared with Settings)
+  styles/
+    theme.css       colours, fonts, spacing; the only file with colour values
+    app.css         everything else, in sections that follow the app
 ```
 
-`npm run lint` must pass: it is what catches a component used without an import after a move.
+To change a screen, open its page file. To change how something looks everywhere
+(a button, a badge), it's in `ui.jsx` and the matching section of `app.css`.
+
+`npm run lint` must pass: it is what catches a name used without an import.
